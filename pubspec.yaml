@@ -1,0 +1,79 @@
+name: eggbound_rush
+description: "Organize your pasture, track nests and eggs, and keep a local collection log."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  flutter_riverpod: ^2.6.1
+  sqflite: ^2.4.3
+  path: ^1.9.1
+  path_provider: ^2.1.6
+  shared_preferences: ^2.5.5
+  image_picker: ^1.2.3
+  webview_flutter: ^4.14.1
+  audioplayers: ^6.8.1
+  intl: ^0.20.3
+  http: ^1.6.0
+  share_plus: ^13.3.0
+  collection: ^1.19.1
+  package_info_plus: ^10.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.8
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/app/images/
+    - assets/app/images/2.0x/
+    - assets/app/images/3.0x/
+    - assets/app/backgrounds/
+    - assets/app/branding/
+    - assets/app/branding/2.0x/
+    - assets/sounds/
+    - assets/docs/
+
+  fonts:
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito-400.ttf
+          weight: 400
+        - asset: assets/fonts/Nunito-600.ttf
+          weight: 600
+        - asset: assets/fonts/Nunito-700.ttf
+          weight: 700
+
+flutter_launcher_icons:
+  image_path: "assets/app/icon/app_icon_ios_1024.png"
+  ios: true
+  remove_alpha_ios: true
+  android: "ic_launcher"
+  adaptive_icon_background: "assets/app/icon/app_icon_adaptive_background.png"
+  adaptive_icon_foreground: "assets/app/icon/app_icon_adaptive_foreground.png"
+  min_sdk_android: 24
+
+flutter_native_splash:
+  color: "#8FD14F"
+  image: "assets/app/icon/app_icon_adaptive_foreground.png"
+  android_12:
+    color: "#8FD14F"
+    image: "assets/app/icon/app_icon_adaptive_foreground.png"
+  fullscreen: false
+  android: true
+  ios: true
