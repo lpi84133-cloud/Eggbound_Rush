@@ -76,7 +76,9 @@
 			<string>UIInterfaceOrientationLandscapeLeft</string>
 			<string>UIInterfaceOrientationLandscapeRight</string>
 		</array>
-		<key>UIStatusBarHidden</key>
-		<false/>
+	<key>UIStatusBarHidden</key>
+	<false/>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>Eggbound Rush uses your device identifier only to understand which campaign led you to the app, so we can improve how it is offered.</string>
 	</dict>
 </plist>

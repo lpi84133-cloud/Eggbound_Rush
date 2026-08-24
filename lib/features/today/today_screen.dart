@@ -59,7 +59,7 @@ String _todayLabel() {
     'Friday', 'Saturday', 'Sunday',
   ];
   final now = DateTime.now();
-  return '${days[now.weekday - 1]}, ${formatDate(now)}';
+  return '${days[now.weekday - 1]} · ${formatDate(now)}';
 }
 
 class _Dashboard extends ConsumerWidget {
