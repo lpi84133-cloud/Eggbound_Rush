@@ -38,6 +38,38 @@ class SettingsController extends Notifier<AppSettings> {
   Future<void> setDailyGoal(int value) =>
       _persist(state.copyWith(dailyGoal: value.clamp(1, 20)));
 
+  /// Turns the local daily reminder on or off. Enabling first asks the OS for
+  /// notification permission; if the user declines, the switch stays off.
+  Future<void> setRemindersEnabled(bool value) async {
+    final services = ref.read(servicesProvider);
+    if (value) {
+      final granted = await services.notifications.requestPermission();
+      if (!granted) {
+        await _persist(state.copyWith(remindersEnabled: false));
+        return;
+      }
+      await services.notifications.scheduleDaily(
+        hour: state.reminderHour,
+        minute: state.reminderMinute,
+      );
+    } else {
+      await services.notifications.cancelDaily();
+    }
+    await _persist(state.copyWith(remindersEnabled: value));
+  }
+
+  /// Changes the time of day the reminder fires and reschedules it when the
+  /// reminder is currently on.
+  Future<void> setReminderTime(int hour, int minute) async {
+    await _persist(state.copyWith(reminderHour: hour, reminderMinute: minute));
+    if (state.remindersEnabled) {
+      await ref.read(servicesProvider).notifications.scheduleDaily(
+            hour: hour,
+            minute: minute,
+          );
+    }
+  }
+
   Future<void> setTheme(String themeId) async {
     if (themeId == state.themeId) return;
     await _persist(state.copyWith(themeId: themeId));

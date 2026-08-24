@@ -2,7 +2,7 @@ name: eggbound_rush
 description: "Organize your pasture, track nests and eggs, and keep a local collection log."
 publish_to: 'none'
 
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: ^3.12.2
@@ -30,6 +30,12 @@ dependencies:
   # or non-organic (arrived via a paid OneLink campaign).
   appsflyer_sdk: 6.18.1
   app_tracking_transparency: ^2.0.7
+
+  # Local-only daily reminders. Purely on-device scheduling — no push service
+  # and no Firebase involved, so it never overlaps with any remote messaging.
+  flutter_local_notifications: ^22.3.0
+  timezone: ^0.11.1
+  flutter_timezone: ^5.1.0
 
 dev_dependencies:
   flutter_test:

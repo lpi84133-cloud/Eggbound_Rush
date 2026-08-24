@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/data/app_database.dart';
+import '../../core/services/notification_service.dart';
 import '../../core/services/sound_service.dart';
 import '../../data/flock_repository.dart';
 import '../../data/pasture_repository.dart';
@@ -19,6 +20,7 @@ class AppServices {
     required this.stats,
     required this.preferences,
     required this.feedback,
+    required this.notifications,
     required this.notices,
     required this.notice,
     required this.needsOnboarding,
@@ -30,6 +32,7 @@ class AppServices {
   final StatsRepository stats;
   final PreferencesRepository preferences;
   final FeedbackService feedback;
+  final NotificationService notifications;
   final RemoteNoticeService notices;
   final RemoteNotice notice;
   final bool needsOnboarding;
@@ -112,6 +115,7 @@ class BootController extends Notifier<BootState> {
     late RemoteNoticeService notices;
     var notice = RemoteNotice.fallback;
     final feedback = FeedbackService();
+    final notifications = NotificationService();
     var needsOnboarding = true;
 
     final tasks = <BootTask>[
@@ -204,6 +208,25 @@ class BootController extends Notifier<BootState> {
           report(1);
         },
       ),
+      BootTask(
+        id: 'notifications',
+        label: 'Setting up reminders',
+        weight: 4,
+        timeout: const Duration(seconds: 6),
+        run: (report) async {
+          await notifications.init();
+          // Re-arm the daily reminder so it survives reboots and app updates,
+          // which clear the OS's pending schedule.
+          final settings = preferences.readSettings();
+          if (settings.remindersEnabled) {
+            await notifications.scheduleDaily(
+              hour: settings.reminderHour,
+              minute: settings.reminderMinute,
+            );
+          }
+          report(1);
+        },
+      ),
     ];
 
     final totalWeight =
@@ -238,6 +261,7 @@ class BootController extends Notifier<BootState> {
         stats: stats,
         preferences: preferences,
         feedback: feedback,
+        notifications: notifications,
         notices: notices,
         notice: notice,
         needsOnboarding: needsOnboarding,

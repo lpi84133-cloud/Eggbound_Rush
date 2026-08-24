@@ -101,6 +101,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ],
                   ),
                 ),
+                const SectionTitle('Reminders'),
+                SoftCard(
+                  child: Column(
+                    children: [
+                      _SwitchRow(
+                        icon: Icons.notifications_active_rounded,
+                        title: 'Daily reminder',
+                        subtitle: 'A gentle nudge to collect and log eggs',
+                        value: settings.remindersEnabled,
+                        onChanged: controller.setRemindersEnabled,
+                      ),
+                      const Divider(height: AppGap.lg),
+                      _ReminderTimeRow(
+                        time: TimeOfDay(
+                          hour: settings.reminderHour,
+                          minute: settings.reminderMinute,
+                        ),
+                        enabled: settings.remindersEnabled,
+                        onTap: _pickReminderTime,
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: AppGap.md),
                 _LinkRow(
                   icon: Icons.palette_rounded,
@@ -223,6 +246,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _pickReminderTime() async {
+    final settings = ref.read(settingsControllerProvider);
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(
+        hour: settings.reminderHour,
+        minute: settings.reminderMinute,
+      ),
+    );
+    if (picked != null) {
+      await ref
+          .read(settingsControllerProvider.notifier)
+          .setReminderTime(picked.hour, picked.minute);
+    }
+  }
+
   Future<void> _confirmReset() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -293,6 +332,60 @@ class _SwitchRow extends StatelessWidget {
         ),
         Switch(value: value, onChanged: onChanged),
       ],
+    );
+  }
+}
+
+class _ReminderTimeRow extends StatelessWidget {
+  const _ReminderTimeRow({
+    required this.time,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final TimeOfDay time;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.4,
+      child: Row(
+        children: [
+          const Icon(Icons.schedule_rounded, size: 20, color: AppColors.meadow),
+          const SizedBox(width: AppGap.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Reminder time', style: AppText.bodyStrong),
+                Text(
+                  enabled
+                      ? 'Tap to change when it arrives'
+                      : 'Turn the reminder on to set a time',
+                  style: AppText.caption,
+                ),
+              ],
+            ),
+          ),
+          Material(
+            color: AppColors.shell,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: enabled ? onTap : null,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                child: Text(
+                  time.format(context),
+                  style: AppText.section.copyWith(color: AppColors.barkDeep),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

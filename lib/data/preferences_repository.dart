@@ -9,6 +9,9 @@ class AppSettings {
     this.showZones = true,
     this.themeId = 'green_meadow',
     this.dailyGoal = 3,
+    this.remindersEnabled = false,
+    this.reminderHour = 8,
+    this.reminderMinute = 0,
   });
 
   final bool soundEnabled;
@@ -17,12 +20,22 @@ class AppSettings {
   final String themeId;
   final int dailyGoal;
 
+  /// Whether the local daily reminder is switched on.
+  final bool remindersEnabled;
+
+  /// Local time the daily reminder fires at.
+  final int reminderHour;
+  final int reminderMinute;
+
   AppSettings copyWith({
     bool? soundEnabled,
     bool? hapticsEnabled,
     bool? showZones,
     String? themeId,
     int? dailyGoal,
+    bool? remindersEnabled,
+    int? reminderHour,
+    int? reminderMinute,
   }) =>
       AppSettings(
         soundEnabled: soundEnabled ?? this.soundEnabled,
@@ -30,6 +43,9 @@ class AppSettings {
         showZones: showZones ?? this.showZones,
         themeId: themeId ?? this.themeId,
         dailyGoal: dailyGoal ?? this.dailyGoal,
+        remindersEnabled: remindersEnabled ?? this.remindersEnabled,
+        reminderHour: reminderHour ?? this.reminderHour,
+        reminderMinute: reminderMinute ?? this.reminderMinute,
       );
 }
 
@@ -70,6 +86,9 @@ class PreferencesRepository {
   static const _kShowZones = 'settings.showZones';
   static const _kTheme = 'settings.theme';
   static const _kDailyGoal = 'settings.dailyGoal';
+  static const _kRemindersEnabled = 'settings.remindersEnabled';
+  static const _kReminderHour = 'settings.reminderHour';
+  static const _kReminderMinute = 'settings.reminderMinute';
   static const _kOnboarded = 'app.onboarded';
   static const _kSeeded = 'app.seeded';
   static const _kName = 'profile.name';
@@ -85,6 +104,9 @@ class PreferencesRepository {
         showZones: _prefs.getBool(_kShowZones) ?? true,
         themeId: _prefs.getString(_kTheme) ?? 'green_meadow',
         dailyGoal: _prefs.getInt(_kDailyGoal) ?? 3,
+        remindersEnabled: _prefs.getBool(_kRemindersEnabled) ?? false,
+        reminderHour: _prefs.getInt(_kReminderHour) ?? 8,
+        reminderMinute: _prefs.getInt(_kReminderMinute) ?? 0,
       );
 
   Future<void> writeSettings(AppSettings settings) async {
@@ -93,6 +115,9 @@ class PreferencesRepository {
     await _prefs.setBool(_kShowZones, settings.showZones);
     await _prefs.setString(_kTheme, settings.themeId);
     await _prefs.setInt(_kDailyGoal, settings.dailyGoal);
+    await _prefs.setBool(_kRemindersEnabled, settings.remindersEnabled);
+    await _prefs.setInt(_kReminderHour, settings.reminderHour);
+    await _prefs.setInt(_kReminderMinute, settings.reminderMinute);
   }
 
   UserProfile readProfile() {
