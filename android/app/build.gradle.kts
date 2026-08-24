@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.eggboundrush.eggbound_rush"
+    namespace = "com.eggboundrush.eggboundrushgame"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,7 +15,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.eggboundrush.eggbound_rush"
+        applicationId = "com.eggboundrush.eggboundrushgame"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
