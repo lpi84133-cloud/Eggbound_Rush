@@ -2,7 +2,7 @@ name: eggbound_rush
 description: "Organize your pasture, track nests and eggs, and keep a local collection log."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.12.2

@@ -20,6 +20,9 @@ class FeedScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final entriesAsync = ref.watch(feedEntriesProvider);
     final costsAsync = ref.watch(feedCostsProvider);
+    final activeHens = ref.watch(
+      flockSummaryProvider.select((s) => s.valueOrNull?.activeHens ?? 0),
+    );
 
     return Scaffold(
       body: Column(
@@ -46,7 +49,8 @@ class FeedScreen extends ConsumerWidget {
                     AppGap.page, AppGap.md + 2, AppGap.page, 110),
                 children: [
                   costsAsync.maybeWhen(
-                    data: (costs) => _CostBlock(costs: costs),
+                    data: (costs) =>
+                        _CostBlock(costs: costs, activeHens: activeHens),
                     orElse: () => const SizedBox.shrink(),
                   ),
                   SectionTitle(
@@ -96,9 +100,10 @@ class FeedScreen extends ConsumerWidget {
 }
 
 class _CostBlock extends StatelessWidget {
-  const _CostBlock({required this.costs});
+  const _CostBlock({required this.costs, required this.activeHens});
 
   final FeedCostSummary costs;
+  final int activeHens;
 
   @override
   Widget build(BuildContext context) {
@@ -111,6 +116,7 @@ class _CostBlock extends StatelessWidget {
 
     final perEgg = costs.costPerEgg;
     final perKg = costs.averageCostPerKg;
+    final daysLeft = costs.estimatedDaysRemaining(activeHens);
 
     return Column(
       children: [
@@ -155,7 +161,72 @@ class _CostBlock extends StatelessWidget {
             ),
           ],
         ),
+        if (daysLeft != null) ...[
+          const SizedBox(height: AppGap.sm + 2),
+          _FeedRemainingTile(days: daysLeft, activeHens: activeHens),
+        ],
       ],
+    );
+  }
+}
+
+class _FeedRemainingTile extends StatelessWidget {
+  const _FeedRemainingTile({required this.days, required this.activeHens});
+
+  final int days;
+  final int activeHens;
+
+  @override
+  Widget build(BuildContext context) {
+    final (tone, badge) = switch (days) {
+      > 14 => (AppColors.accent, null as String?),
+      > 6 => (AppColors.warn, 'Low'),
+      _ => (AppColors.danger, 'Very low'),
+    };
+
+    final valueText = days <= 0 ? '< 1' : '$days';
+    final caption = 'est. for $activeHens '
+        '${activeHens == 1 ? 'hen' : 'hens'} · ~0.12 kg/hen/day';
+
+    return SoftCard(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      child: Row(
+        children: [
+          Sprite(Art.hay, size: 34),
+          const SizedBox(width: AppGap.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('ESTIMATED FEED LEFT', style: AppText.overline),
+                const SizedBox(height: 3),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text(
+                      valueText,
+                      style: AppText.metric.copyWith(color: tone),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      'days',
+                      style: AppText.body.copyWith(color: tone),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(caption, style: AppText.caption),
+              ],
+            ),
+          ),
+          if (badge != null) ...[
+            const SizedBox(width: AppGap.sm),
+            ToneBadge(label: badge, tone: tone),
+          ],
+        ],
+      ),
     );
   }
 }

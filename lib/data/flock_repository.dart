@@ -94,6 +94,18 @@ class FeedCostSummary {
 
   double? get averageCostPerKg =>
       totalKg <= 0 ? null : totalSpent / totalKg;
+
+  /// Rough estimate of how many days the current feed stock will last.
+  /// Assumes ~120 g per hen per day — a typical layer on complete pellet feed.
+  /// Returns null when there are no purchases recorded or no active hens.
+  int? estimatedDaysRemaining(int activeHens) {
+    if (activeHens <= 0 || totalKg <= 0 || since == null) return null;
+    const kgPerHenPerDay = 0.12;
+    final daysSince = DateTime.now().difference(since!).inDays;
+    final consumed = daysSince * activeHens * kgPerHenPerDay;
+    final remaining = (totalKg - consumed).clamp(0.0, double.infinity);
+    return (remaining / (activeHens * kgPerHenPerDay)).round();
+  }
 }
 
 class FlockRepository {
