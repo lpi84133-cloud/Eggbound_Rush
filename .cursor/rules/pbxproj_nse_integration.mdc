@@ -1,0 +1,101 @@
+---
+description: Checklist and known bugs for wiring the NSE target into project.pbxproj on Windows. Read before editing pbxproj for any gray-flow project.
+alwaysApply: false
+---
+
+# NSE pbxproj Integration — Known Bugs & Required Checks
+
+When patching `project.pbxproj` on Windows to add the Notification Service Extension (NSE), these bugs have occurred and must be prevented/verified.
+
+## Critical bugs to avoid
+
+### 1. NSE PBXGroup placed outside the PBXGroup section
+
+**Symptom:** Xcode build error:
+```
+Build input file cannot be found: '.../ios/NotificationService.swift'
+(missing the NotificationService/ subdirectory)
+```
+**Cause:** The NSE group was inserted after the PBXFileReference section, not inside `/* Begin PBXGroup section */`. Xcode can't resolve the path hierarchy, so it skips the group's `path = NotificationService` and looks for the swift file directly under `ios/`.
+
+**Fix / verify:**
+```python
+g_start = txt.find('/* Begin PBXGroup section */')
+g_end   = txt.find('/* End PBXGroup section */')
+assert NSE_GROUP_UUID in txt[g_start:g_end], "NSE group NOT in PBXGroup section"
+```
+Also the NSE group must be a child of the main group (the one whose `children` contains `97C146F01CF9000F007C117D /* Runner */`).
+
+---
+
+### 2. CODE_SIGN_ENTITLEMENTS on wrong target (NSE instead of Runner)
+
+**Symptom:** App launches but APNs/FCM registration silently fails:
+```
+no valid "aps-environment" entitlement string found for application
+[FCM012002] Error in didFailToRegisterForRemoteNotificationsWithError
+```
+Push notifications dead. Backend reports `Application install not found` (no FCM token sent).
+
+**Cause:** A loop bug in the patch script attached `CODE_SIGN_ENTITLEMENTS` to the NSE's build configs instead of Runner's. The runner app has no `aps-environment` so iOS refuses APNs registration entirely.
+
+**Fix / verify:**
+```python
+for uid in ['97C147061CF9000F007C117D',  # Runner Debug
+            '97C147071CF9000F007C117D',  # Runner Release
+            '249021D4217E4FDB00AE95B9']: # Runner Profile
+    block = txt[txt.find(uid): txt.find(uid)+1400]
+    assert 'CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements' in block
+
+# NSE configs must NOT have it
+for uid in [NSE_DEBUG_CFG, NSE_RELEASE_CFG, NSE_PROFILE_CFG]:
+    block = txt[txt.find(uid): txt.find(uid)+1400]
+    assert 'CODE_SIGN_ENTITLEMENTS' not in block
+```
+
+---
+
+### 3. CRLF / BOM corruption
+
+On Windows, reading pbxproj as text and writing with standard Python file I/O adds a UTF-8 BOM and can mangle `\r\n` ↔ `\n`. CocoaPods fails with `Nanaimo::Reader::ParseError \xEF`.
+
+**Rules:**
+- Always read as binary: `open(p, 'rb').read().decode('utf-8')`
+- Normalise to LF internally: `.replace('\r\n', '\n')`
+- Write back as CRLF, no BOM: `txt.replace('\n', '\r\n').encode('utf-8')` → `open(p, 'wb').write(...)`
+
+---
+
+### 4. Firebase/Messaging pinned in NSE pod target
+
+The NSE target has `pod 'Firebase/Messaging'` without a version. CocoaPods may resolve a newer Firebase that requires iOS 16+ while the Runner side is pinned to 12.14.0, causing a conflict.
+
+**Fix:** Always pin NSE to the same Firebase version:
+```ruby
+target 'NotificationService' do
+  use_frameworks!
+  platform :ios, '15.0'
+  pod 'Firebase/Messaging', '12.14.0'  # must match firebase_core resolved version
+end
+```
+
+---
+
+## Verification script (run after any pbxproj patch)
+
+```python
+import re
+txt = open('ios/Runner.xcodeproj/project.pbxproj','rb').read().decode('utf-8')
+# 1. NSE group in correct section
+assert '/* Begin PBXGroup section */' in txt
+g0 = txt.find('/* Begin PBXGroup section */')
+g1 = txt.find('/* End PBXGroup section */')
+assert NSE_GROUP_UUID in txt[g0:g1], "NSE group outside PBXGroup section!"
+# 2. Entitlements on Runner (not NSE)
+assert txt.count('CODE_SIGN_ENTITLEMENTS') == 3, "wrong count"
+for uid in RUNNER_CFG_UIDS:
+    assert 'CODE_SIGN_ENTITLEMENTS' in txt[txt.find(uid):txt.find(uid)+1400]
+# 3. No BOM
+assert open('ios/Runner.xcodeproj/project.pbxproj','rb').read()[:3] != b'\xef\xbb\xbf'
+print("pbxproj OK")
+```

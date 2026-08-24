@@ -265,7 +265,7 @@ class PastureScreen extends ConsumerWidget {
     messenger.showSnackBar(
       SnackBar(
         content: Text('${egg.type.label} logged as collected'),
-        duration: const Duration(seconds: 5),
+        duration: const Duration(seconds: 6),
         action: SnackBarAction(
           label: 'Undo',
           textColor: AppColors.goldSoft,

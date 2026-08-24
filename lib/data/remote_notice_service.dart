@@ -99,7 +99,7 @@ class RemoteNoticeService {
       await _prefs.setString(_cacheKey, jsonEncode(notice.toJson()));
       return notice;
     } on Object catch (error) {
-      debugPrint('Notice refresh skipped: $error');
+      assert(() { debugPrint('Notice refresh skipped: $error'); return true; }());
       return readCached();
     }
   }

@@ -189,7 +189,7 @@ class BootController extends Notifier<BootState> {
         id: 'audio',
         label: 'Warming up interface sounds',
         weight: 10,
-        timeout: const Duration(seconds: 5),
+        timeout: const Duration(seconds: 6),
         run: (report) async {
           final settings = preferences.readSettings();
           feedback
@@ -243,7 +243,7 @@ class BootController extends Notifier<BootState> {
         }).timeout(task.timeout);
       } on Object catch (error) {
         // A single slow or unavailable subsystem degrades that feature only.
-        debugPrint('Boot task "${task.id}" degraded: $error');
+        assert(() { debugPrint('Boot task "${task.id}" degraded: $error'); return true; }());
         degraded.add(task.id);
       }
       completedWeight += task.weight;

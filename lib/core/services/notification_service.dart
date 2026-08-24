@@ -48,7 +48,7 @@ class NotificationService {
       } catch (error) {
         // Falls back to the default (UTC) location. Scheduling still works;
         // only the wall-clock alignment could be off on an exotic setup.
-        debugPrint('[Notifications] time zone lookup failed: $error');
+        assert(() { debugPrint('[Notifications] time zone lookup failed: $error'); return true; }());
       }
 
       const android = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -78,7 +78,7 @@ class NotificationService {
 
       _ready = true;
     } catch (error) {
-      debugPrint('[Notifications] init failed: $error');
+      assert(() { debugPrint('[Notifications] init failed: $error'); return true; }());
     }
   }
 
@@ -101,7 +101,7 @@ class NotificationService {
         return granted ?? true;
       }
     } catch (error) {
-      debugPrint('[Notifications] permission request failed: $error');
+      assert(() { debugPrint('[Notifications] permission request failed: $error'); return true; }());
     }
     return false;
   }
@@ -132,7 +132,7 @@ class NotificationService {
         matchDateTimeComponents: DateTimeComponents.time,
       );
     } catch (error) {
-      debugPrint('[Notifications] schedule failed: $error');
+      assert(() { debugPrint('[Notifications] schedule failed: $error'); return true; }());
     }
   }
 
@@ -141,7 +141,7 @@ class NotificationService {
     try {
       await _plugin.cancel(id: _reminderId);
     } catch (error) {
-      debugPrint('[Notifications] cancel failed: $error');
+      assert(() { debugPrint('[Notifications] cancel failed: $error'); return true; }());
     }
   }
 

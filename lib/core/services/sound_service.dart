@@ -62,7 +62,7 @@ class FeedbackService {
     } on Object catch (error) {
       // Audio is a nicety: a device that refuses to open an output must not
       // stop the app from starting.
-      debugPrint('Audio warm-up skipped: $error');
+      assert(() { debugPrint('Audio warm-up skipped: $error'); return true; }());
       _ready = false;
     }
   }
@@ -75,7 +75,7 @@ class FeedbackService {
       await player.stop();
       await player.play(AssetSource(sound.asset));
     } on Object catch (error) {
-      debugPrint('Sound failed: $error');
+      assert(() { debugPrint('Sound failed: $error'); return true; }());
     }
   }
 

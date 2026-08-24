@@ -1,0 +1,121 @@
+---
+description: Safe-area CSS injection must never touch the partner site's own horizontal padding — otherwise responsive layouts collapse and buttons hit the WebView edge. Applies to RoostPortal (iOS).
+globs: **/roost_portal.dart,**/roost_portal.dart,**/roost_portal.dart
+alwaysApply: false
+---
+
+# WebView safe-area CSS injection — do not squash the partner site
+
+The gray-flow shell (`RoostPortal`) injects a CSS override on
+`onPageFinished` to neutralise safe-area insets that would otherwise leave
+blank strips on notched devices (iPhone Dynamic Island / notch). This
+override is easy to overreach with; if it does, the
+partner site renders visibly narrower than in a normal mobile browser —
+buttons squeezed together and touching the screen edges.
+
+## Symptom
+
+Same URL in the WebView vs. Safari on the same device:
+
+- WebView: content columns extend fully to the left/right edges, no gutters
+- Browser: content has natural side padding (~12–24 px) as designed
+
+The site is fine — we broke it with our CSS.
+
+## Root cause
+
+Older template code shipped a rule like this:
+
+```javascript
+// ❌ BAD — kills the site's own gutters together with the safe-area gap.
+'html,body,#__nuxt,#__layout,#app,#root,' +
+'.gameview-mobile-header,.app-header{' +
+  'padding-top:0!important;' +
+  'padding-left:0!important;' +
+  'padding-right:0!important;' +
+  'margin-top:0!important;' +
+'}';
+```
+
+Zeroing `padding-left/right` and `margin-top` on `html/body/#app/#root`
+also erases the site's designed horizontal padding — that's what makes the
+content look "compressed".
+
+## Correct pattern
+
+Split the injection into two independent responsibilities:
+
+1. **Overwrite the site's own safe-area CSS variables** (`--sat`, `--sab`,
+   `--safe-top`, …). Sites that never define such variables are unaffected.
+2. **Only touch the visual top spacer**, and only on classes that are
+   known sticky/decorative headers — never `html/body/#app/#root`.
+
+```javascript
+// ✅ GOOD
+var CSS =
+  ':root{' +
+    '--safe-area-inset-top:0px!important;' +
+    '--safe-area-inset-right:0px!important;' +
+    '--safe-area-inset-bottom:0px!important;' +
+    '--safe-area-inset-left:0px!important;' +
+    '--sat:0px!important;--sar:0px!important;' +
+    '--sab:0px!important;--sal:0px!important;' +
+    '--safe-top:0px!important;--safe-bottom:0px!important;' +
+    '--safe-left:0px!important;--safe-right:0px!important;' +
+  '}' +
+  // Only narrow decorative headers. Never html / body / #app / #root.
+  '.gameview-mobile-header,.app-header,.js-safe-top{' +
+    'padding-top:0!important;' +
+    'margin-top:0!important;' +
+  '}' +
+  // ✅ LESSON: lock document edges so the page feels native — no rubber-band
+  // overscroll that reveals the black scaffold above/below the site.
+  'html,body{overscroll-behavior:none!important;' +
+    'overscroll-behavior-y:none!important;}';
+```
+
+## Separate native-feel injections (keep as their OWN idempotent functions)
+
+These are NOT part of the safe-area patch — ship them as separate injections
+on `onPageFinished` (each guarded by its own `window.__flag`):
+
+- **Zoom lock** (`_installZoomLock`): `enableZoom(false)` is NOT enough on iOS.
+  Set a viewport meta `maximum-scale=1, minimum-scale=1, user-scalable=no,
+  viewport-fit=contain` and `preventDefault` on `gesturestart/gesturechange/
+  gestureend` + double-tap. Re-assert on SPA route changes.
+- **Tap polish** (`_installTapPolish`): kill the grey box on tap —
+  `* { -webkit-tap-highlight-color: transparent !important; }` and disable the
+  long-press callout on non-inputs. Inputs stay selectable.
+
+Both must be re-asserted after a rotation reflow (see
+`cold_start_push_viewport.mdc` → `_pokeReflow`).
+
+## Hard rules
+
+- ❌ **Never** apply `padding-left:0!important` / `padding-right:0!important`
+     to `html`, `body`, `#__nuxt`, `#__layout`, `#app`, `#root`.
+- ❌ **Never** apply `margin-*:0!important` to those elements either.
+- ✅ Only touch `padding-top` / `margin-top`, and only on the site's known
+     top-spacer class list.
+- ✅ Keep the CSS-variable overrides — they only take effect if the site
+     already declares those variables.
+- ✅ **Skip the whole patch while the keyboard is open** (compositor race —
+     on iOS this is a direct cause of keyboard jitter; guard `apply()` with
+     `kbOpen()`, see the keyboard-jitter section in `gray_flow_guide.md`).
+- ✅ `[FINGERPRINT]` Rewrite the injection body (function/var names,
+     sentinel flag, string formatting) per project — identical JS across
+     apps is grep-able and clusters the portfolio
+     (`gray_part_mixing_review.mdc` §1).
+
+## Verification checklist
+
+Compare side-by-side on a real device before shipping:
+
+- [ ] Open the same partner URL in Safari and in the WebView shell
+- [ ] Buttons / cards / grids have identical horizontal gutters
+- [ ] No blank strip above the fixed header from safe-area insets
+- [ ] Landscape with a notch / Dynamic Island: no white bars on the sides
+- [ ] Keyboard open: no reflow / jump when the safe-area timer would fire
+
+If the gutters differ, the injection is over-reaching. Fix the JS payload —
+never the native side.

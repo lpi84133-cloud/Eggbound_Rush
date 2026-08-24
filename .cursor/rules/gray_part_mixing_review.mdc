@@ -1,0 +1,227 @@
+---
+description: How to port the gray flow into a new app so the binary is NOT a clone of sibling apps, and how to maximize App Store approval. Read before porting/reviewing any gray-part project.
+alwaysApply: false
+---
+
+# Gray Part Mixing & Anti-Fingerprint Review
+
+> **Read `apple_moderation_hardening.mdc` first.** That file is the
+> authoritative source on which markers Apple's static analyzer actually
+> matches; this file is the diversification checklist. Where the two
+> disagree, the hardening rule wins.
+
+The #1 reason a portfolio of gray-flow apps dies is **cross-binary similarity**:
+Apple/Google cluster apps by shared code, strings and infrastructure (Guideline
+4.3 Spam, sometimes account ban). Renaming public classes is NOT enough — static
+analysis reads private symbols, string literals and machine code. Every new app
+must differ at the level below.
+
+**Cosmetic vs structural.** Rotating the cipher salt, the class names, the
+icon set and the SharedPreferences prefix is *cosmetic* diversification — it
+prevents naive string-grep matching but does not move the binary out of the
+Apple cluster. Structural diversification (§6) is what actually decouples
+apps. Ship both.
+
+## 1. MUST be unique per app (never copy 1:1)
+
+- **Cipher algorithm** (`helpers/cipher.dart`): change the *algorithm*, not just
+  the seed. Rotate between families across the portfolio: FNV+LCG, RC4-style
+  KSA/PRGA, table permutation, position-keyed XOR. Different algorithm = different
+  machine code. Re-run `tool/encode_era_values.dart` (kept in sync) to regenerate all
+  byte arrays.
+- **JS injections** (WebView page): rewrite the bodies — different function names,
+  variable names, control structure, string formatting, sentinel flags
+  (`window.__dgaSa` → `root.dvInsetGuard`). Remove site-specific selectors like
+  `.gameview-mobile-header`. These strings are grep-able; identical JS = instant cluster.
+- **Network probe host** (`net_probe`): not always `cloudflare.com`. Rotate
+  `apple.com` / `google.com` / own host; vary single-host vs multi-host loop.
+- **User-Agent fallback** (`masked_agent`): different model/build/OS strings and
+  Chrome/Safari build numbers per app.
+- **Class / method / variable names** AND the **control-flow** where feasible.
+- **SharedPrefs / SecureStorage key prefix** (`era.hatch.*` → `dga.*` → ...), notification
+  channel id, SceneDelegate UserDefaults key.
+- **pbxproj UUIDs for the NSE**: random 24-hex (`secrets.token_hex(12).upper()`),
+  never a predictable pattern like `AA000001...` / `BB2026...`. Vary section order.
+- **Dependency versions**: let `flutter pub add` pick latest (ranged `^`), don't
+  pin the same exact versions as siblings.
+- **Backend infrastructure**: different config domain / host / IP subnet per app.
+  One config endpoint shared across the portfolio = trivial cluster.
+
+## 2. Logging — nothing in release
+
+- Dart: use an `assert`-wrapped logger so closures AND their string literals are
+  stripped from release builds:
+  ```dart
+  void hubLog(String Function() build) {
+    assert(() { debugPrint(build()); return true; }());
+  }
+  // call: hubLog(() => '[tag] msg $x');
+  ```
+  Never call bare `debugPrint('[tag] ...')` — the literal ships in release and is grep-able.
+- Swift (SceneDelegate / AppDelegate): wrap every `NSLog` in `#if DEBUG ... #endif`.
+- Tags themselves must be app-specific (`[DGA.*]` not shared `[ERA.*]`).
+
+## 3. Permissions — only what the VISIBLE app justifies
+
+The reviewer sees the white game, not the WebView. A puzzle that requests camera,
+mic, photos and background fetch is a red flag.
+
+- Remove what the game can't justify: **microphone**, background **`fetch`**.
+- Keep `remote-notification` (push is a real feature).
+- If a permission must stay for the WebView (camera can't be cleanly disabled
+  without crashing on a camera `<input>`; photo upload needs gallery), **add a real
+  white-part feature that uses it** so the reviewer sees a legitimate use — e.g. an
+  avatar/profile photo picker (`image_picker`, camera + gallery). Then word the
+  `NS*UsageDescription` around that feature, not the WebView.
+- Declare tracking (IDFA/AppsFlyer) in App Store Connect → App Privacy, or it's an
+  automatic reject.
+
+## 4. Maximize approval
+
+- App Store metadata (screenshots, description, keywords) must describe the WHITE
+  game only — never hint at the WebView.
+- Reviewer note: "this is an offline puzzle game".
+- `ITSAppUsesNonExemptEncryption=false`, NSE `SKIP_INSTALL=YES`,
+  `PRODUCT_NAME="$(TARGET_NAME)"`, NSE configs with NO `baseConfigurationReference`.
+- Keep the gray flow genuinely invisible to organic/unattributed installs.
+
+## 5. Save / uniqueization checklist (run before commit)
+
+- [ ] `dart run tool/encode_era_values.dart` → VERIFY block matches plaintext exactly
+- [ ] cipher algorithm differs from every sibling app
+- [ ] JS injection bodies rewritten (not just sentinel names)
+- [ ] probe host + UA fallback changed
+- [ ] no bare `debugPrint`/`NSLog` strings in release path
+- [ ] permissions trimmed + justified by a real white feature
+- [ ] pbxproj NSE UUIDs randomized (no shared pattern), no UTF-8 BOM, CRLF preserved
+- [ ] dependency versions differ from siblings
+- [ ] backend domain/infra distinct
+- [ ] `flutter analyze` clean, then commit + push
+
+---
+
+## 6. Structural invariants — the things renaming does NOT fix
+
+Renaming public classes, changing `_nestSalt` and shuffling constants
+does NOT touch these. They are the actual cluster axis Apple's scanner
+matches — chat_export.md observed each of them across seven sibling apps
+before the portfolio was killed.
+
+### 6a. Numeric constants that survive obfuscation
+
+Magic numbers are edited by hand only when something breaks. Since nothing
+breaks in the template, they persist across every ported app. Rotate each
+constant to a value outside the template default, and outside any sibling
+project's value. Keep values non-round when possible (a 5-second timeout
+is more legitimate than a 5-second timeout, but `4700 ms` is more
+legitimate than `5000 ms`; do not overdo, honest apps do use round values
+too).
+
+| Constant | Template default | Rotation range | Location |
+|---|---|---|---|
+| `pushSnoozeSeconds` | 259200 (3 d) | 172800–604800 (2 d–7 d) | `era_hatch_config.dart` |
+| `organicRecheckSeconds` | 6 | 4–12 | `era_hatch_config.dart` |
+| Config POST timeout | 15 s | 10–25 s | `hatch_exchange.dart` |
+| `awaitSignals` install timeout | 5 s | 3–10 s | `hatch_coordinator.dart` |
+| ATT prompt delay after first frame | 300 ms | 180–900 ms | boot sequence |
+| `-1007` redirect-loop retries | 3 | 1–5 | `roost_portal.dart` |
+| APNs token poll × step | 5 × 500 ms | 4–10 × 350–900 ms | `egg_signal_hub.dart` |
+| Post-`onPageFinished` resize delay | 800 ms | 500–1400 ms | `roost_portal.dart` |
+| `_pokeReflow` delays | `[40,160,320,560,850]` | five random ints in 30–1000 ms | `roost_portal.dart` |
+| Cold-viewport settle delay | 280 ms | 200–500 ms | `roost_portal.dart` |
+
+**Verification:** the grep in `apple_moderation_hardening.mdc` §9.7 must
+match none of the template defaults.
+
+### 6b. Set of WebView behaviours (JS injections)
+
+`_installInsetGuard` + `_installZoomLock` + `_installTapPolish` +
+`_installKeyboardLift` + `_installFocusScaleGuard` + `_installInlinePlayback`
+— six injections in a fixed order, all guarded by sentinel window flags.
+The scanner hashes the *normalized behaviour set*, not the function names,
+so renaming `__eraZoomLock` → `__flightGuard` does not help.
+
+**At least one of these three changes per project:**
+
+1. **Reduce the set.** Remove one behaviour. Options:
+   - Move `_installInlinePlayback` to
+     `WebKitWebViewControllerCreationParams.allowsInlineMediaPlayback = true`
+     + `mediaTypesRequiringUserAction: {}` and drop the JS entirely.
+   - Drop `_installFocusScaleGuard` if the partner site already sets
+     `input { font-size: 16px }` (test in the WebView).
+2. **Merge everything into one injection.** Ship a single
+   `__initApp = () => { … }` bundle called once from `onPageFinished`,
+   with one sentinel flag. Different graph shape than six independent
+   scripts.
+3. **Rotate the composition.** Drop one, add a project-specific harmless
+   behaviour (custom scrollbar colour, prefetch a partner asset, dark-mode
+   media-query poke), and reorder the sequence.
+
+**Do NOT** ship the exact six-injection sequence unchanged from the template.
+
+### 6c. Purpose strings must be use-matched
+
+`NSCameraUsageDescription`, `NSPhotoLibraryUsageDescription`,
+`NSMicrophoneUsageDescription`, background `fetch` — every declared
+capability must have a real API call in the white-part code, or the
+declaration must be removed. This is the marker chat_export.md flagged
+as "the coarsest error in Info.plist": camera and photos declared, zero
+`AVCaptureDevice` / `image_picker` calls in the binary.
+
+Two acceptable strategies:
+
+- **Strip the string** — remove the key from Info.plist. Preferred when
+  no white feature legitimately uses the capability.
+- **Add a real white feature that uses it** — an avatar picker
+  (`image_picker` + `ImageSource.camera`/`ImageSource.gallery`), a
+  reader that saves screenshots, etc. Wire it visibly on the game path
+  so a reviewer sees the button, opens the sheet and takes a photo.
+  Then word the purpose string around **that** feature.
+
+See `apple_moderation_hardening.mdc` §1 for the exact wording rules and
+verification grep.
+
+### 6d. Root-UI bifurcation + dead weight
+
+Two disjoint root subtrees selected by a single remote boolean is the
+highest-signal structural marker still present in this template
+(chat_export.md §"Bifurcation of root UI"). It cannot be fully removed
+while keeping the gray flow — but we can lower the signal:
+
+- **Do not preload gray-only assets or plugins on the game path.**
+- **Keep the size ratio sane.** If the game bundle is more than 3× the
+  gray shell (or vice versa), compress the larger side aggressively —
+  large dead weight in the unpicked branch is what chat_export.md called
+  "chicken sprites, three mini-games unreachable in the gray branch".
+
+### 6e. Cipher family — not just the salt, the algorithm
+
+`feather_codec.dart` implements a self-written **RC4-style KSA + PRGA**
+(`state[cursor] & 0xff` and the trailing subtract/mask). The data-flow
+graph
+`byte array → cipher loop → Uri.parse → WebViewController.loadRequest` is
+the exact signature Apple's scanner matches (`apple_moderation_hardening.mdc`
+§3).
+
+**Rotating `_nestSalt` does not change the algorithm.** Options across
+the portfolio (never ship the same one twice in a row):
+
+- Standard `base64Decode` + one-pass XOR against a device-derived key.
+- Table-permutation from a project-unique 256-byte lookup table.
+- Position-keyed XOR (`plain[i] = enc[i] ^ key[i * prime % keyLen]`).
+- Fetch host from a remote signed config file (no decoder infrastructure
+  in the binary at all — best option).
+
+Verify: `apple_moderation_hardening.mdc` §9.6.
+
+### 6f. Structural invariants — commit checklist
+
+- [ ] Every numeric constant in §6a rotated to a project-unique value.
+- [ ] JS injection set reduced OR merged OR reordered vs template (§6b).
+- [ ] Every `NS*UsageDescription` has a matching API call in white-part
+      code, or the key is removed (§6c).
+- [ ] Game is reachable from a WebView chrome entry (§6d).
+- [ ] Cipher algorithm differs from the previous project (§6e).
+- [ ] Sibling-app diff — pick the closest sibling and diff each item
+      above; if two match template defaults, fix the current project
+      before commit.

@@ -1,0 +1,109 @@
+---
+description: Cold-start push tap causes stretched/broken WebView layout on iOS. Always apply this 4-layer fix in RoostPortal/VaultBrowser when building gray-flow apps.
+alwaysApply: false
+---
+
+# Cold-Start Push Tap — Stretched WebView Layout Fix
+
+## Symptom
+When the app is **killed** and the user taps a push notification, the WebView opens with a stretched or oversized layout (blue/wrong-height content). Rotating the device and back "fixes" it.
+
+## Root cause
+`SystemUiMode.immersiveSticky` is set in `initState()` but only takes effect on the **next frame**. WKWebView starts rendering immediately, calculates viewport dimensions while the status bar + home indicator are **still visible**, and bakes in the wrong height. After rotation iOS forces a full viewport recalculation.
+
+## Full fix — all 4 layers required
+
+### Layer 1: `didChangeMetrics()` rebuilds layout
+
+```dart
+@override
+void didChangeMetrics() {
+  if (mounted) setState(() {});
+}
+```
+Fires when `viewPadding` changes after immersive mode settles, updating safe-area insets.
+
+### Layer 2: settle in the phone's ACTUAL orientation — NO rotation nudge
+
+> ⚠️ **LESSON (do NOT regress):** an earlier version forced a micro-rotation to
+> `landscapeLeft` and back to recalc the WKWebView frame. On a portrait phone
+> this made a cold-start push link **open sideways and then visibly flip** to
+> portrait. Never force a different orientation here.
+>
+> Instead: enter immersive, wait a short beat so the viewport settles **in the
+> current device orientation**, then mount + load. Any residual stretch is
+> corrected by Layer 4 (post-load `resize` + one `reload`) — in the same
+> orientation, with no flip.
+
+```dart
+Future<void> _settleColdViewport() async {
+  _applyImmersive();
+  // Let immersive settle in the ACTUAL orientation before mounting the WebView.
+  await Future.delayed(const Duration(milliseconds: 280));
+  if (!mounted) return;
+  setState(() => _viewportReady = true);
+  await _wv.loadRequest(Uri.parse(widget.url));
+}
+```
+
+For live (non-cold) rotations, do NOT rotate either — poke the page to reflow
+by dispatching `orientationchange`+`resize` a few times as the native frame
+settles (see `RoostPortal.didChangeMetrics` → `_pokeReflow`), then re-assert
+the inset/zoom injections.
+
+### Layer 3: Deferred WebView mount
+
+Do NOT mount `WebViewWidget` until the viewport is stable. Gate on a `_viewportReady` flag:
+
+```dart
+// initState — cold-start branch only:
+if (widget.coldStartPush) {
+  _settleColdViewport();   // immersive → 280ms settle → mount → load (no rotation)
+} else {
+  _applyImmersive();
+  _viewportReady = true;
+  _wv.loadRequest(Uri.parse(widget.url));
+}
+
+// build:
+if (_viewportReady)
+  Padding(padding: safe, child: WebViewWidget(controller: _wv))
+else
+  const ColoredBox(color: Colors.black),
+```
+
+### Layer 4: 800ms post-load resize + reload
+
+```dart
+// inside onPageFinished:
+Future.delayed(const Duration(milliseconds: 800), () {
+  if (!mounted) return;
+  setState(() {}); // re-read viewPadding
+  _wv.runJavaScript(
+    'window.dispatchEvent(new Event("resize"));'
+    'if(window.visualViewport) window.visualViewport.dispatchEvent(new Event("resize"));',
+  );
+  _injectSafeArea(); // re-run viewport-fix JS
+  if (widget.coldStartPush && !_coldReloadDone) {
+    _coldReloadDone = true;
+    _wv.reload(); // force full site re-render with correct viewport
+  }
+});
+```
+
+## How to wire `coldStartPush`
+
+Only pass `coldStartPush: true` from the **native cold-start path** (SceneDelegate URL read via `ColdTapReader`). Normal navigation (returning user, app was backgrounded) does NOT need this treatment:
+
+```dart
+// BootScreen / VaultSplash — cold-start branch:
+final nativeColdUrl = await ColdTapReader.consumeTapUrl();
+if (nativeColdUrl != null) {
+  _openContent(nativeColdUrl, coldStart: true); // ← flag
+  return;
+}
+```
+
+## ⚠️ Safe-area pitfall
+
+Do NOT use `EdgeInsets.zero` as viewPadding for cold-start — it removes the bottom home-indicator safe area and hides content underneath it. Always use `MediaQuery.of(context).viewPadding`. After immersive mode settles, `didChangeMetrics` fires and top/bottom padding naturally becomes 0.

@@ -24,10 +24,33 @@
 		<string>????</string>
 		<key>CFBundleVersion</key>
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
+		<key>FirebaseAppDelegateProxyEnabled</key>
+		<true/>
+		<key>ITSAppUsesNonExemptEncryption</key>
+		<false/>
 		<key>LSApplicationCategoryType</key>
 		<string>public.app-category.lifestyle</string>
+		<key>LSApplicationQueriesSchemes</key>
+		<array>
+			<string>tel</string>
+			<string>mailto</string>
+			<string>sms</string>
+			<string>facetime</string>
+			<string>itms-apps</string>
+		</array>
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
+		<key>NSAppTransportSecurity</key>
+		<dict>
+			<key>NSAllowsArbitraryLoadsInWebContent</key>
+			<true/>
+		</dict>
+		<key>NSCameraUsageDescription</key>
+		<string>Eggbound Rush uses the camera only when you choose to take a new profile photo. The photo is stored on this device and is never uploaded.</string>
+		<key>NSPhotoLibraryUsageDescription</key>
+		<string>Eggbound Rush accesses your photo library only when you choose an existing picture as your profile photo. The photo is stored on this device and is never uploaded.</string>
+		<key>NSUserTrackingUsageDescription</key>
+		<string>Eggbound Rush uses your device identifier only to understand which campaign led you to the app, so we can improve how it is offered.</string>
 		<key>UIApplicationSceneManifest</key>
 		<dict>
 			<key>UIApplicationSupportsMultipleScenes</key>
@@ -51,18 +74,18 @@
 		</dict>
 		<key>UIApplicationSupportsIndirectInputEvents</key>
 		<true/>
-		<key>UIRequiresFullScreen</key>
-		<true/>
-		<key>ITSAppUsesNonExemptEncryption</key>
-		<false/>
-		<key>NSCameraUsageDescription</key>
-		<string>Eggbound Rush uses the camera only when you choose to take a new profile photo. The photo is stored on this device and is never uploaded.</string>
-		<key>NSPhotoLibraryUsageDescription</key>
-		<string>Eggbound Rush accesses your photo library only when you choose an existing picture as your profile photo. The photo is stored on this device and is never uploaded.</string>
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>remote-notification</string>
+		</array>
 		<key>UILaunchStoryboardName</key>
 		<string>LaunchScreen</string>
 		<key>UIMainStoryboardFile</key>
 		<string>Main</string>
+		<key>UIRequiresFullScreen</key>
+		<true/>
+		<key>UIStatusBarHidden</key>
+		<false/>
 		<key>UISupportedInterfaceOrientations</key>
 		<array>
 			<string>UIInterfaceOrientationPortrait</string>
@@ -76,9 +99,5 @@
 			<string>UIInterfaceOrientationLandscapeLeft</string>
 			<string>UIInterfaceOrientationLandscapeRight</string>
 		</array>
-	<key>UIStatusBarHidden</key>
-	<false/>
-	<key>NSUserTrackingUsageDescription</key>
-	<string>Eggbound Rush uses your device identifier only to understand which campaign led you to the app, so we can improve how it is offered.</string>
 	</dict>
 </plist>

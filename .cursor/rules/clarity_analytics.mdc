@@ -1,0 +1,398 @@
+---
+description: Microsoft Clarity analytics for the gray flow (iOS) — where to put tracking and why (drop-off, offer reachability, deposit + auth funnel, push permission)
+globs: **/main.dart,**/insight.dart,**/insight_env.dart,**/splash_gate.dart,**/roost_portal.dart,**/permit_screen.dart,**/no_signal_screen.dart
+alwaysApply: false
+---
+
+# Clarity analytics for the gray flow (iOS)
+
+## ⚠️ OPTIONAL — only add Clarity when the user asks for it
+
+Clarity is **not** part of the default gray flow. Add it **only if the user
+explicitly requests analytics / session tracking**. It is not required for the
+app to work and it is another SDK + a unique `projectId` to manage.
+
+- If the user asked for it → follow this rule.
+- If the brief does NOT mention analytics / Clarity / tracking-of-drop-off →
+  **do not add it**, and do not scaffold any `insight.dart` / `ClarityWidget`.
+- If you are unsure whether it's wanted → **STOP and ask** one question, e.g.:
+  > Do you want Microsoft Clarity analytics (session replay + drop-off/funnel
+  > events) added, or ship without it? It needs its own Clarity projectId.
+
+Everything below applies ONLY after the user has opted in.
+
+## 0. Why we add this (read first)
+
+The business problem: **minus-EV traffic** — we don't know *where* a paid
+user drops off. Clarity answers this with session replay + custom events:
+
+- **Session replay** records the *native* Flutter surface (splash video,
+  push-permission screen, the game, and the WebView **container**).
+- The DOM **inside** the WebView is NOT recorded. The offer funnel (page
+  changes, deposit taps, sign-up/login) is only visible if WE emit custom
+  events from an injected JS probe.
+
+Every user is grouped by their **AppsFlyer id (`af_id`)** so the dashboard
+can be sliced per acquired user. Four questions we must answer per session:
+
+1. Which screen did the user drop off on? → `last_screen` tag + `screen_*`
+2. Did the user reach the offer site? → `web_offer_reached` vs
+   `web_offer_unreachable` (+ reason).
+3. Did the user register / log in / deposit? → funnel events below.
+4. Did the user allow notifications? → `notif_permission` tag.
+
+> Clarity backend can take **up to ~2h** to show the first sessions of a
+> NEW project. Data IS being sent if the SDK logs HTTP `204`. Do not
+> "fix" a working integration just because the dashboard is still empty.
+
+---
+
+## 1. Setup (once per project)
+
+```bash
+flutter pub add clarity_flutter
+```
+
+`[FINGERPRINT]` The Clarity **project id is unique per project** — never
+reuse another app's id. Put it in its own file:
+
+```dart
+// lib/core/insight_env.dart
+const String kClarityProjectId = 'PASTE_PROJECT_ID_HERE';
+```
+
+Create the crash-safe facade `lib/core/insight.dart` (copy verbatim —
+every call is guarded so a Clarity failure can never crash the gray flow):
+
+```dart
+import 'package:clarity_flutter/clarity_flutter.dart';
+import 'insight_env.dart';
+
+/// Crash-safe facade over Microsoft Clarity. Replay captures the native
+/// surface; these calls add the funnel signals that answer "where did the
+/// user drop off?". Never let a Clarity error bubble into the gray flow.
+class Insight {
+  const Insight._();
+
+  static ClarityConfig get config => ClarityConfig(
+        projectId: kClarityProjectId,
+        logLevel: LogLevel.None, // verbose only while wiring a new project
+      );
+
+  static void identify(String? aid, {Map<String, String> tags = const {}}) {
+    if (aid != null && aid.isNotEmpty) {
+      _guard(() => Clarity.setCustomUserId(_clip(aid, 255)));
+      tag('aid', aid);
+    }
+    tags.forEach(tag);
+  }
+
+  static void screen(String name) { screenName(name); event('screen_$name'); }
+
+  static void screenName(String name) => _guard(() {
+        Clarity.setCurrentScreenName(_clip(name, 255));
+        Clarity.setCustomTag('last_screen', _clip(name, 255));
+      });
+
+  static void event(String name) =>
+      _guard(() => Clarity.sendCustomEvent(_clip(name, 254)));
+
+  static void tag(String key, String value) {
+    if (value.isEmpty) return;
+    _guard(() => Clarity.setCustomTag(key, _clip(value, 255)));
+  }
+
+  static String _clip(String v, int max) => v.length <= max ? v : v.substring(0, max);
+  static void _guard(void Function() body) { try { body(); } catch (_) {} }
+}
+```
+
+Wrap the app root in `main.dart` (wrap `FeatheredOriginsApp` — do NOT change the
+existing service-assembly order):
+
+```dart
+import 'package:clarity_flutter/clarity_flutter.dart';
+import 'core/insight.dart';
+// ...
+runApp(ClarityWidget(
+  clarityConfig: Insight.config,
+  app: FeatheredOriginsApp(
+    vault: vault, probe: probe, signal: signal,
+    dispatch: dispatch, pulse: pulse, gateEnabled: gateEnabled,
+  ),
+));
+```
+
+---
+
+## 2. Identify the user + track routing (BootScreen)
+
+`lib/screens/boot_screen.dart` is the splash + gray/game decision.
+
+- `initState` → `Insight.screen('loading');`
+- Right after `signal.buildPayload(...)` (where `af_id` is known), before
+  `dispatch.send(body)`, identify:
+
+```dart
+Insight.identify(
+  body['af_id']?.toString(),
+  tags: {
+    'af_status': body['af_status']?.toString() ?? '',
+    'media_source': body['media_source']?.toString() ?? '',
+    'campaign': body['campaign']?.toString() ?? '',
+    'os': body['os']?.toString() ?? '',
+    'locale': body['locale']?.toString() ?? '',
+  },
+);
+```
+
+- Tag the run mode + emit one event per routing branch:
+  - `_goContent`  → `Insight.tag('run_mode','web'); Insight.event('route_web');`
+  - `_goGame`     → `Insight.tag('run_mode','game'); Insight.event('route_game');`
+  - `_goOffline`  → `Insight.event('route_offline');`
+  - native cold-start push branch → `Insight.event('route_push_link');`
+  - one-shot cached url branch → `Insight.event('route_cached_link');`
+
+---
+
+## 3. Notification permission (FeatherInvitation + skipped/returning)
+
+We must always know: **granted / denied / skipped / os_denied / snoozed.**
+
+In `lib/hatchway/pages/feather_invitation.dart`, use the **real** result of the OS
+dialog (the bool returned by `pulse.askPermission()` — do not re-read the
+vault):
+
+```dart
+Future<void> _accept() async {
+  Insight.event('push_invite_accept');
+  final bool granted = await widget.pulse.askPermission();
+  Insight.tag('notif_permission', granted ? 'granted' : 'denied');
+  Insight.event(granted ? 'push_granted' : 'push_denied');
+  if (!granted) await widget.vault.writeInviteCooldown(_cooldownTarget());
+  _forward();
+}
+
+Future<void> _skip() async {
+  Insight.event('push_invite_skip');
+  Insight.tag('notif_permission', 'skipped');
+  await widget.vault.writeInviteCooldown(_cooldownTarget());
+  _forward();
+}
+```
+
+Emit `Insight.screen('push_invite');` when the screen appears (in
+`initState`).
+
+For returning users who skip the invite (`BootScreen._directBrowser`),
+classify the session too so the tag is never blank — use whatever push
+state getters your `NestVault` exposes (e.g. `isPushAllowed()` /
+`isPushBlockedByOs()`; adjust to the actual method names):
+
+```dart
+Insight.tag('notif_permission',
+    widget.vault.isPushAllowed() ? 'granted'
+    : widget.vault.isPushBlockedByOs() ? 'os_denied'
+    : 'snoozed');
+```
+
+---
+
+## 4. The WebView funnel (RoostPortal) — the important part
+
+`lib/hatchway/pages/roost_portal.dart`. Add state fields:
+
+```dart
+bool _offerReached = false; // first successful main-frame load happened
+bool _pageHadError = false; // reset each navigation; blocks false success
+```
+
+### 4a. Lifecycle + screen
+- `initState` → `Insight.screen('web'); Insight.event('web_open');`
+- `didChangeAppLifecycleState`: `resumed` → `web_foreground`,
+  `paused` → `web_background` (paused inside the WebView is the clearest
+  drop-off marker).
+- `onPageStarted` → `_pageHadError = false;`
+
+### 4b. Offer reachability + connection errors
+On the first successful `onPageFinished` the user reached the offer. In
+`onWebResourceError` (main frame only) classify WHY it failed:
+
+```dart
+onPageFinished: (url) { /* existing spinner/JS fixes */ _trackWebPage(url); },
+onWebResourceError: (WebResourceError err) {
+  if (err.isForMainFrame != true) return;
+  _pageHadError = true;
+  final reason = _classifyWebError(err);
+  final failed = _lastMainFrame ?? widget.destination;
+  final host = Uri.tryParse(failed)?.host ?? '';
+  Insight.event('web_error');
+  Insight.tag('web_error_reason', reason);
+  Insight.tag('web_last_error', '${err.errorCode}:${err.description}');
+  if (host.isNotEmpty) Insight.tag('web_error_host', host);
+  if (!_offerReached) {
+    Insight.event('web_offer_unreachable');
+    Insight.tag('offer_reached', 'false');
+    Insight.tag('offer_unreachable_reason', reason);
+  } else {
+    Insight.event('web_error_after_load');
+  }
+  // existing redirect-loop recovery + offline handling …
+},
+```
+
+```dart
+void _trackWebPage(String url) {
+  final uri = Uri.tryParse(url);
+  Insight.screenName('web:${uri == null ? url : '${uri.host}${uri.path}'}');
+  Insight.event('web_page');
+  Insight.tag('web_last_url', url);
+  if (!_offerReached && !_pageHadError) {
+    _offerReached = true;
+    Insight.event('web_offer_reached');
+    Insight.tag('offer_reached', 'true');
+    if (uri?.host != null) Insight.tag('offer_host', uri!.host);
+  }
+  if (_depositRx.hasMatch(url)) { Insight.event('web_cashier_page'); Insight.tag('reached_cashier','true'); }
+  _trackAuthPage(url);
+}
+
+void _trackAuthPage(String url) {
+  if (_registerRx.hasMatch(url)) { Insight.event('web_register_page'); Insight.tag('reached_register','true'); }
+  else if (_loginRx.hasMatch(url)) { Insight.event('web_login_page'); Insight.tag('reached_login','true'); }
+}
+
+static String _classifyWebError(WebResourceError err) {
+  final d = err.description.toLowerCase(); final c = err.errorCode;
+  if (d.contains('connection_refused')) return 'connection_refused';
+  if (d.contains('too_many_redirects') || c == -1007) return 'redirect_loop';
+  if (d.contains('name_not_resolved') || d.contains('unknownhost') || c == -1003 || c == -1006) return 'dns_unresolved';
+  if (d.contains('timed out') || d.contains('timeout') || c == -1001) return 'timeout';
+  if (d.contains('not connected') || d.contains('internet') || c == -1009) return 'no_network';
+  if (d.contains('cancelled') || c == -999) return 'cancelled';
+  if (d.contains('ssl') || d.contains('cert')) return 'ssl_error';
+  return 'other';
+}
+
+static final RegExp _depositRx = RegExp(r'(deposit|cashier|top.?up|replenish|payment|checkout|wallet|пополн|депозит|касс|оплат|внести|платеж)', caseSensitive: false);
+static final RegExp _registerRx = RegExp(r'(sign.?up|regist|create.?account|onboarding|регистрац|зарегистр)', caseSensitive: false);
+static final RegExp _loginRx = RegExp(r'(sign.?in|log.?in|log.?on|/auth\b|authoriz|войти|вход|авториз)', caseSensitive: false);
+```
+
+Also tag external-scheme hand-off (payment/deposit intent) in
+`onNavigationRequest` before opening it externally:
+`Insight.event('web_external'); Insight.tag('web_external_scheme', uri.scheme);`
+
+> **iOS note:** `WebResourceError.errorCode` on WKWebView carries
+> `NSURLError*` codes (negative, e.g. `-1009` not-connected, `-1001`
+> timeout, `-999` cancelled, `-1007` too-many-redirects).
+> `_classifyWebError` above uses these codes.
+
+### 4c. In-page funnel via injected JS probe
+The WebView DOM is invisible to replay. Inject an idempotent probe on
+`onPageFinished` and bridge it over a `JavaScriptChannel`. `[FINGERPRINT]`
+rename the channel + sentinel per project (do NOT ship `EraInsight`
+across apps).
+
+```dart
+// in the controller builder:
+_web.addJavaScriptChannel('EraInsight',
+    onMessageReceived: (m) => _onWebSignal(m.message));
+
+void _installInsightProbe() {
+  _web.runJavaScript(r'''
+(function(){
+  if (window.__lavaInsight) return; window.__lavaInsight = true;
+  function send(t){ try { EraInsight.postMessage(t); } catch(e){} }
+  var DEP=/(deposit|cashier|top.?up|add funds|replenish|payment|pay now|checkout|withdraw|пополн|депозит|касс|оплат|внести|вывод|платеж)/i;
+  var REG=/(sign.?up|regist|create.?account|регистрац|зарегистр)/i;
+  var LOG=/(sign.?in|log.?in|log.?on|войти|вход|авториз)/i;
+  var lastPath='';
+  function reportPath(){ var p=location.pathname+location.search; if(p!==lastPath){ lastPath=p; send('path:'+p);} }
+  reportPath();
+  ['pushState','replaceState'].forEach(function(fn){ var o=history[fn]; history[fn]=function(){ var r=o.apply(this,arguments); setTimeout(reportPath,60); return r; }; });
+  window.addEventListener('popstate',function(){ setTimeout(reportPath,60); });
+  document.addEventListener('click',function(e){
+    try{ var el=e.target;
+      for(var i=0;i<4&&el;i++){
+        var t=((el.innerText||el.value||(el.getAttribute&&el.getAttribute('aria-label'))||'')+'').trim();
+        if(t){ if(DEP.test(t)){send('deposit_click:'+t.slice(0,60));return;}
+               if(REG.test(t)){send('register_click:'+t.slice(0,60));return;}
+               if(LOG.test(t)){send('login_click:'+t.slice(0,60));return;} }
+        el=el.parentElement;
+      }
+    }catch(x){}
+  },true);
+  document.addEventListener('submit',function(e){
+    try{ var f=e.target;
+      var pw=f.querySelectorAll?f.querySelectorAll('input[type="password"]'):[];
+      var blob=((f.innerText||'')+' '+(f.getAttribute('action')||'')+' '+(f.className||''));
+      if(pw&&pw.length>=2){send('auth_submit:register');return;}
+      if(pw&&pw.length===1){ send('auth_submit:'+(REG.test(blob)?'register':'login')); return; }
+      if(REG.test(blob)){send('auth_submit:register');return;}
+      if(LOG.test(blob)){send('auth_submit:login');return;}
+      send('form_submit');
+    }catch(x){ send('form_submit'); }
+  },true);
+})();
+''');
+}
+
+void _onWebSignal(String raw) {
+  final i = raw.indexOf(':');
+  final type = i < 0 ? raw : raw.substring(0, i);
+  final data = i < 0 ? '' : raw.substring(i + 1);
+  switch (type) {
+    case 'path':
+      Insight.event('web_spa_route'); Insight.tag('web_last_path', data);
+      if (_depositRx.hasMatch(data)) { Insight.event('web_cashier_page'); Insight.tag('reached_cashier','true'); }
+      _trackAuthPage(data); break;
+    case 'deposit_click':
+      Insight.event('web_deposit_click'); Insight.tag('deposit_intent','true');
+      if (data.isNotEmpty) Insight.tag('deposit_label', data); break;
+    case 'register_click': Insight.event('web_register_click'); Insight.tag('register_intent','true'); break;
+    case 'login_click':    Insight.event('web_login_click'); Insight.tag('login_intent','true'); break;
+    case 'auth_submit':
+      if (data == 'register') { Insight.event('web_register_submit'); Insight.tag('attempted_register','true'); }
+      else { Insight.event('web_login_submit'); Insight.tag('attempted_login','true'); } break;
+    case 'form_submit': Insight.event('web_form_submit'); break;
+  }
+}
+```
+
+Call `_installInsightProbe()` and `_trackWebPage(url)` from
+`onPageFinished` (the probe is idempotent, so re-injecting is safe).
+
+---
+
+## 5. Remaining screens
+
+- `lib/hatchway/pages/empty_air_page.dart` → `Insight.screen('offline');`
+  + `Insight.event('offline_retry');` in the Retry handler.
+- White-part screens (`lib/screens/*`) → `Insight.screen('menu' | 'levels'
+  | 'game');` in `initState` (convert `StatelessWidget` → `StatefulWidget`
+  if needed; do not spam from `build`).
+
+---
+
+## 6. The funnel you get in the dashboard
+
+```
+route_web → web_open → web_offer_reached ─┐ (or web_offer_unreachable + reason)
+                                          ├→ web_register_page/click → web_register_submit
+                                          ├→ web_login_page/click    → web_login_submit
+                                          └→ web_cashier_page        → web_deposit_click
+```
+Slice by tags: `aid`, `run_mode`, `last_screen`, `notif_permission`,
+`offer_reached`, `web_error_reason`, `reached_register/login/cashier`.
+
+## 7. Hard rules
+- ❌ Never call the Clarity SDK directly — always through `Insight`
+  (guarded). A Clarity failure must never break the gray flow.
+- ❌ Never reuse a Clarity `projectId` across projects (`[FINGERPRINT]`).
+- ❌ Never ship the same JS-channel name / sentinel across apps
+  (`[FINGERPRINT]`) — see `gray_part_mixing_review.mdc`.
+- ✅ Keep event names STABLE and few; put high-cardinality values (urls,
+  hosts, labels, error text) in TAGS, not event names.
+- ✅ `identify()` only after `af_id` is known (post `buildPayload`).
+- ✅ The JS probe must stay idempotent (`window.__lavaInsight` guard).

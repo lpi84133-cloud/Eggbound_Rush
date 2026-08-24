@@ -1,5 +1,4 @@
-# Uncomment this line to define a global platform for your project
-# platform :ios, '13.0'
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -36,8 +35,23 @@ target 'Runner' do
   end
 end
 
+target 'EggMediaNotification' do
+  use_frameworks!
+  platform :ios, '15.0'
+  # First `pod install` will resolve Firebase/Messaging to whatever version
+  # firebase_core pulls in for Runner. After that run, open Podfile.lock,
+  # copy the resolved version here as an explicit pin (e.g.
+  # `pod 'Firebase/Messaging', '12.4.0'`) so a later `pod install` cannot
+  # drift the NSE onto a newer major and break linking against Runner —
+  # see pbxproj_nse_integration.mdc §4.
+  pod 'Firebase/Messaging'
+end
+
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+    end
   end
 end
