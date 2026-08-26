@@ -24,10 +24,12 @@ const Map<String, String> _plaintext = <String, String>{
   'kOneLinkHost': 'eggboundrush.onelink.me',
 
   // Identity fragments that surface in the UA (slot suffix) — kept out of
-  // plaintext to avoid the exact `appid/<bundleId> appname/<AppName>`
-  // substring inside the binary.
+  // plaintext to avoid the exact `appid/<id> appname/<AppName>` substring
+  // inside the binary. Partner wants the App Store id (not the bundle id)
+  // and a no-space app token.
   'kBundleIdentity': 'com.eggboundrush.eggboundrushgame',
-  'kAppNameIdentity': 'Eggbound Rush',
+  'kStoreIdentity': '6802340982',
+  'kAppNameIdentity': 'EggboundRush',
   'kUaAppIdTag': 'appid/',
   'kUaAppNameTag': 'appname/',
 

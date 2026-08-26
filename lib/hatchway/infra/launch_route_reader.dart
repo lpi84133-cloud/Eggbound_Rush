@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Reads (and consumes) the URL captured by iOS SceneDelegate when the user
@@ -16,9 +18,12 @@ class LaunchRouteReader {
   static const String _key = 'ebr_launch_route';
 
   static Future<String?> consume() async {
+    if (!Platform.isIOS) return null;
     try {
       final prefs = await SharedPreferences.getInstance();
-      final url = prefs.getString(_key);
+      // SceneDelegate may have written after this isolate loaded its cache.
+      await prefs.reload();
+      final url = prefs.getString(_key)?.trim();
       if (url == null || url.isEmpty) return null;
       await prefs.remove(_key);
       return url;

@@ -27,6 +27,11 @@ class FeatherInvitation extends StatefulWidget {
 class _FeatherInvitationState extends State<FeatherInvitation> {
   bool _busy = false;
 
+  static const List<Color> _fill = <Color>[
+    Color(0xFF8FD14F),
+    Color(0xFF5CB330),
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -40,6 +45,7 @@ class _FeatherInvitationState extends State<FeatherInvitation> {
   Future<void> _accept() async {
     if (_busy) return;
     setState(() => _busy = true);
+    await widget.vault.markInviteShown();
     final granted = await widget.signals.requestAuthorization();
     if (!granted) {
       await widget.vault.markPushOsDenied();
@@ -50,6 +56,7 @@ class _FeatherInvitationState extends State<FeatherInvitation> {
   Future<void> _skip() async {
     if (_busy) return;
     setState(() => _busy = true);
+    await widget.vault.markInviteShown();
     await widget.vault.snoozePushUntil(
       DateTime.now().add(
         const Duration(seconds: EraHatchConfig.pushSnoozeSeconds),
@@ -66,42 +73,44 @@ class _FeatherInvitationState extends State<FeatherInvitation> {
         ? 'assets/hatchway/notify/Horizontal_Notifications_Screen.webp'
         : 'assets/hatchway/notify/Vertical_Notifications_Screen.webp';
 
+    // Identical size + colour on both buttons. Landscape sits them in a
+    // tight row (Accept then Skip) so they do not cover the baked-in copy.
     final buttonWidth = landscape
-        ? (size.width * 0.32).clamp(220.0, 480.0)
+        ? (size.width * 0.28).clamp(168.0, 280.0)
         : (size.width * 0.72).clamp(220.0, 400.0);
+    final buttonHeight = landscape ? 54.0 : 60.0;
 
-    Widget button({
-      required String label,
-      required VoidCallback? onTap,
-      required List<Color> gradient,
-      Color textColor = Colors.white,
-    }) {
+    Widget pill(String label, VoidCallback onTap) {
       return SizedBox(
         width: buttonWidth,
-        height: 60,
+        height: buttonHeight,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: gradient,
+            gradient: const LinearGradient(
+              colors: _fill,
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
-            borderRadius: BorderRadius.circular(30),
+            borderRadius: BorderRadius.circular(buttonHeight / 2),
             boxShadow: const [
-              BoxShadow(color: Color(0x66101C13), blurRadius: 10, offset: Offset(0, 5)),
+              BoxShadow(
+                color: Color(0x66101C13),
+                blurRadius: 10,
+                offset: Offset(0, 5),
+              ),
             ],
           ),
           child: Material(
             color: Colors.transparent,
             child: InkWell(
-              borderRadius: BorderRadius.circular(30),
+              borderRadius: BorderRadius.circular(buttonHeight / 2),
               onTap: _busy ? null : onTap,
               child: Center(
                 child: Text(
                   label,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: textColor,
+                  style: const TextStyle(
+                    color: Colors.white,
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
                     height: 1.0,
@@ -115,29 +124,49 @@ class _FeatherInvitationState extends State<FeatherInvitation> {
       );
     }
 
-    final actions = Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        button(
-          label: 'Allow notifications',
-          onTap: _accept,
-          gradient: const [Color(0xFF8FD14F), Color(0xFF5CB330)],
-        ),
-        const SizedBox(height: 12),
-        button(
-          label: 'Not now',
-          onTap: _skip,
-          gradient: const [Color(0xFF3E5B47), Color(0xFF2A4231)],
-        ),
-      ],
-    );
+    final accept = pill('Accept', _accept);
+    final skip = pill('Skip', _skip);
 
-    // Landscape: no SafeArea, centre horizontally so the notch does not
-    // skew the buttons off the artwork.
+    final actions = landscape
+        ? Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              accept,
+              const SizedBox(width: 14),
+              skip,
+            ],
+          )
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              accept,
+              const SizedBox(height: 12),
+              skip,
+            ],
+          );
+
+    // Landscape: strip every inset so the notch does not shift the
+    // horizontal centre. Portrait: keep a tiny bottom gap, buttons sit
+    // lower so they clear the baked-in title.
     final actionLayer = landscape
-        ? Align(alignment: const Alignment(0, 0.58), child: actions)
-        : SafeArea(child: Align(alignment: const Alignment(0, 0.72), child: actions));
+        ? MediaQuery.removePadding(
+            context: context,
+            removeLeft: true,
+            removeRight: true,
+            removeTop: true,
+            removeBottom: true,
+            child: Align(
+              alignment: const Alignment(0, 0.82),
+              child: actions,
+            ),
+          )
+        : Align(
+            alignment: const Alignment(0, 0.88),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: actions,
+            ),
+          );
 
     return Scaffold(
       backgroundColor: Colors.black,

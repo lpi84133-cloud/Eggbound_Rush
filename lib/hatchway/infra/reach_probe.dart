@@ -24,7 +24,7 @@ class ReachProbe {
         (r) => r != ConnectivityResult.none && r != ConnectivityResult.bluetooth,
       );
     } catch (_) {
-      return true; // Fail open — WebView will surface the real error.
+      return false;
     }
   }
 

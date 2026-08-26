@@ -9,7 +9,11 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../config/era_hatch_config.dart';
+import '../infra/egg_signal_hub.dart';
+import '../infra/launch_route_reader.dart';
+import '../infra/nest_vault.dart';
 import '../infra/roost_agent.dart';
+import 'empty_air_page.dart';
 
 /// Full-screen WebView shell for the paid-campaign content.
 ///
@@ -27,13 +31,19 @@ class RoostPortal extends StatefulWidget {
   const RoostPortal({
     super.key,
     required this.url,
+    required this.vault,
+    required this.signals,
+    required this.onPushFromGate,
     this.coldStartPush = false,
-    required this.offlineBuilder,
   });
 
   final String url;
   final bool coldStartPush;
-  final WidgetBuilder offlineBuilder;
+  final NestVault vault;
+  final EggSignalHub signals;
+  /// Restored in [dispose] so a later tap (after this shell is gone)
+  /// still routes through the gate instead of being dropped.
+  final void Function(String url) onPushFromGate;
 
   @override
   State<RoostPortal> createState() => _RoostPortalState();
@@ -69,7 +79,9 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _lastCommitted = widget.url;
     _connSub = Connectivity().onConnectivityChanged.listen(_onConnectivity);
+    widget.signals.onDestination = _openPushUrl;
     _bootstrap();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _consumePending());
   }
 
   Future<void> _bootstrap() async {
@@ -81,7 +93,10 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
             mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
           )
         : const PlatformWebViewControllerCreationParams();
-    final controller = WebViewController.fromPlatformCreationParams(params);
+    final controller = WebViewController.fromPlatformCreationParams(
+      params,
+      onPermissionRequest: (request) => request.grant(),
+    );
 
     if (controller.platform is WebKitWebViewController) {
       final wk = controller.platform as WebKitWebViewController;
@@ -92,17 +107,32 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
     await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
     await controller.setBackgroundColor(Colors.black);
     await controller.setUserAgent(ua);
+    await controller.enableZoom(false);
     await controller.setNavigationDelegate(NavigationDelegate(
       onNavigationRequest: _onNavRequest,
-      onPageFinished: _onPageFinished,
+      onPageStarted: (url) {
+        // Track the last main-frame URL the same way HenheavenDash /
+        // EggRunnerAdventure do: onPageStarted + onNavigationRequest only.
+        // Do NOT write it from onUrlChange — a 302 bounce-back to `/` fires
+        // url.change without a matching nav.allow, and retrying that landing
+        // restarts the whole redirect chain (gray_flow_guide.md: retry the
+        // last URL from onNavigationRequest on -1007).
+        if (url.isNotEmpty) _lastCommitted = url;
+        _log('page.start $url');
+      },
+      onPageFinished: (url) {
+        _log('page.finish $url');
+        unawaited(_onPageFinished(url));
+      },
       onWebResourceError: _onError,
       onUrlChange: (change) {
-        final u = change.url;
-        if (u != null && u.isNotEmpty) _lastCommitted = u;
+        _log('url.change ${change.url ?? '—'}');
       },
     ));
 
     _wv = controller;
+
+    widget.signals.onDestination = _openPushUrl;
 
     if (widget.coldStartPush) {
       unawaited(_settleColdViewport());
@@ -110,6 +140,41 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
       if (mounted) setState(() => _viewportReady = true);
       await controller.loadRequest(Uri.parse(widget.url));
     }
+    unawaited(_consumePending());
+  }
+
+  void _openPushUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (!mounted || uri == null || !uri.hasScheme) return;
+    unawaited(widget.vault.stashPushUrl(url));
+    // WKWebView drops loadRequest while the scene is still inactive.
+    // Stash and let resume / a remount apply it.
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      _log('push.stash waiting-resume');
+      return;
+    }
+    _applyPushUrl(url, uri);
+  }
+
+  void _applyPushUrl(String url, Uri uri) {
+    _lastCommitted = url;
+    _log('push.open $url');
+    if (_offline) setState(() => _offline = false);
+    unawaited(_wv?.loadRequest(uri));
+  }
+
+  Future<void> _consumePending() async {
+    final nativeTap = await LaunchRouteReader.consume();
+    final stashed = await widget.vault.consumePushUrl();
+    final value = nativeTap ?? stashed;
+    if (value == null) return;
+    final uri = Uri.tryParse(value);
+    if (uri == null || !uri.hasScheme) return;
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      unawaited(widget.vault.stashPushUrl(value));
+      return;
+    }
+    _applyPushUrl(value, uri);
   }
 
   Future<void> _settleColdViewport() async {
@@ -122,18 +187,26 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
 
   Future<NavigationDecision> _onNavRequest(NavigationRequest req) async {
     final uri = Uri.tryParse(req.url);
-    if (uri == null) return NavigationDecision.prevent;
-
-    final scheme = uri.scheme.toLowerCase();
-    const allowed = <String>{'http', 'https', 'about', 'data', 'blob'};
-    if (allowed.contains(scheme)) return NavigationDecision.navigate;
-
-    // Hand external app schemes to the system rather than blocking silently.
-    if (const {'tel', 'mailto', 'sms', 'facetime', 'itms-apps'}.contains(scheme)) {
-      unawaited(launchUrl(uri, mode: LaunchMode.externalApplication));
+    if (uri == null) {
+      _log('nav.reject parse-fail ${req.url}');
       return NavigationDecision.prevent;
     }
-    if (scheme == 'javascript') return NavigationDecision.prevent;
+
+    // Same scheme gate as HenheavenDash / Joker-Lantern. `about` must stay
+    // allowed: the landing opens the offer in an iframe / window that first
+    // navigates to about:blank. Blocking it freezes the hop on page 1.
+    const inline = <String>{'http', 'https', 'about', 'data', 'blob'};
+    if (inline.contains(uri.scheme.toLowerCase())) {
+      if (req.isMainFrame) _lastCommitted = req.url;
+      _log('nav.allow main=${req.isMainFrame} ${req.url}');
+      return NavigationDecision.navigate;
+    }
+    if (uri.scheme.toLowerCase() == 'javascript') {
+      _log('nav.reject javascript ${req.url}');
+      return NavigationDecision.prevent;
+    }
+    _log('nav.handoff ${uri.scheme}:${uri.host}');
+    unawaited(launchUrl(uri, mode: LaunchMode.externalApplication));
     return NavigationDecision.prevent;
   }
 
@@ -144,6 +217,7 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
     await _injectPinchGuard();
     await _injectTapSurface();
     await _injectFocusScroll();
+    await _injectInlinePlay();
 
     // Layer 4 — post-load resize + one reload for cold-start push tap.
     Future.delayed(EraHatchConfig.webViewSettleDelay, () async {
@@ -166,18 +240,42 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
     // -999 is NSURLErrorCancelled — a user-initiated cancel is not a real
     // load failure and must not route to the No-Signal screen.
     if (err.errorCode == -999) return;
+    // WKWebView sometimes reports isForMainFrame as null for the main
+    // navigation — treat null as main-frame so a real load failure is
+    // never silently swallowed.
     final mainFrame = err.isForMainFrame ?? true;
-    if (!mainFrame) return;
-    if (err.errorCode == -1007 &&
-        _redirectAttempts < EraHatchConfig.redirectLoopRetries) {
+    _log('wv.error code=${err.errorCode} main=$mainFrame '
+        'desc="${err.description}"');
+    final lower = err.description.toLowerCase();
+    final looping = err.errorCode == -1007 ||
+        lower.contains('too_many_redirects') ||
+        lower.contains('too many redirects');
+    if (looping && _redirectAttempts < EraHatchConfig.redirectLoopRetries) {
       _redirectAttempts += 1;
       final retry = _lastCommitted ?? widget.url;
+      _log('wv.retry attempt=$_redirectAttempts url=$retry');
       Future.delayed(const Duration(milliseconds: 260), () {
         if (!mounted) return;
         _wv?.loadRequest(Uri.parse(retry));
       });
       return;
     }
+    if (!mainFrame) return;
+    // Only fail over to offline for genuine unreachable-network codes.
+    // Subframe pixels / SSL warnings on affiliate hops are noisy but
+    // recoverable; if we swap the whole shell for offline the second the
+    // partner landing pings a broken tracker, the user never sees the
+    // real destination page. This mirrors HenheavenDash's probe-first
+    // guard without adding the probe (our `ReachProbe` lives outside).
+    const unreachable = <int>{
+      -1001, // NSURLErrorTimedOut
+      -1003, // NSURLErrorCannotFindHost
+      -1004, // NSURLErrorCannotConnectToHost
+      -1005, // NSURLErrorNetworkConnectionLost
+      -1009, // NSURLErrorNotConnectedToInternet
+      -1020, // NSURLErrorDataNotAllowed
+    };
+    if (!unreachable.contains(err.errorCode)) return;
     if (!_offline && mounted) setState(() => _offline = true);
   }
 
@@ -185,11 +283,21 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
     final none = !results.any(
       (r) => r != ConnectivityResult.none && r != ConnectivityResult.bluetooth,
     );
-    if (none && !_offline && mounted) {
-      // Immediate switch — no DNS probe (a probe hangs for seconds while
-      // offline, during which WKWebView renders its built-in error page).
-      setState(() => _offline = true);
+    if (none) {
+      if (!_offline && mounted) setState(() => _offline = true);
+      return;
     }
+    if (_offline && mounted) _resumeFromOffline();
+  }
+
+  /// Keep the WebView mounted. Overlay Nowifi on top; reconnect hides the
+  /// overlay and reloads the last committed page instead of remounting the
+  /// gate (which would re-show the push invite).
+  void _resumeFromOffline() {
+    if (!mounted) return;
+    setState(() => _offline = false);
+    final resume = _lastCommitted ?? widget.url;
+    unawaited(_wv?.loadRequest(Uri.parse(resume)));
   }
 
   // ---- JS injections ----
@@ -200,6 +308,8 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
   var flag = '__ebrInsetGuardV1';
   if (window[flag]) { window[flag].apply && window[flag].apply(); return; }
   function kbOpen(){
+    var vv = window.visualViewport;
+    if (vv && vv.height < window.innerHeight * 0.75) return true;
     if (!document.activeElement) return false;
     var t = document.activeElement.tagName;
     return (t === 'INPUT' || t === 'TEXTAREA' || document.activeElement.isContentEditable === true);
@@ -266,7 +376,9 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
   var s = document.createElement('style');
   s.textContent = '*{-webkit-tap-highlight-color:transparent!important;}'
     + '*:not(input):not(textarea){-webkit-touch-callout:none!important;}'
-    + '::-webkit-scrollbar{width:0;height:0;background:transparent;}';
+    + '::-webkit-scrollbar{width:0;height:0;background:transparent;}'
+    + 'input,textarea,select,[contenteditable="true"]{'
+    + 'font-size:max(16px,1em)!important;}';
   document.documentElement.appendChild(s);
 })();
 ''';
@@ -274,21 +386,63 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
   }
 
   Future<void> _injectFocusScroll() async {
-    // 340 ms — long enough for the WKWebView keyboard animation to settle
-    // before scrolling the focused input, per gray_flow_guide "keyboard
-    // jitter" §. A shorter delay (≤ 250 ms) races the compositor and jumps.
+    // 360 ms — past the WKWebView keyboard animation, not the 350 ms
+    // sibling default. visualViewport lift keeps the focused field above
+    // the keyboard in landscape casino forms.
     const script = '''
 (function(){
-  if (window.__ebrFocusV1) return; window.__ebrFocusV1 = true;
+  if (window.__ebrKbLiftV1) return; window.__ebrKbLiftV1 = true;
+  function isField(n){
+    if (!n) return false;
+    var t = n.tagName;
+    return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || n.isContentEditable === true;
+  }
+  function lift(){
+    var el = document.activeElement;
+    if (!isField(el)) return;
+    try { el.scrollIntoView({block:'nearest', behavior:'auto'}); } catch (_) {}
+    var vv = window.visualViewport;
+    if (!vv) return;
+    var rect = el.getBoundingClientRect();
+    var room = vv.height - 22;
+    if (rect.bottom > room) {
+      try { window.scrollBy(0, rect.bottom - room); } catch (_) {}
+    }
+  }
   document.addEventListener('focusin', function(e){
-    var el = e.target;
-    if (!el) return;
-    var t = el.tagName;
-    if (t !== 'INPUT' && t !== 'TEXTAREA' && !el.isContentEditable) return;
-    setTimeout(function(){
-      try { el.scrollIntoView({block:'center', behavior:'auto'}); } catch (_) {}
-    }, 340);
+    if (isField(e.target)) setTimeout(lift, 360);
   }, true);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', function(){
+      if (isField(document.activeElement)) lift();
+    });
+  }
+})();
+''';
+    await _wv?.runJavaScript(script);
+  }
+
+  Future<void> _injectInlinePlay() async {
+    const script = '''
+(function(){
+  if (window.__ebrInlineV1) return; window.__ebrInlineV1 = true;
+  function wake(video){
+    if (!(video instanceof HTMLVideoElement)) return;
+    video.setAttribute('playsinline','');
+    video.setAttribute('webkit-playsinline','');
+    video.playsInline = true;
+    video.autoplay = true;
+    var go = video.play();
+    if (go && go.catch) go.catch(function(){});
+  }
+  function sweep(node){
+    if (node instanceof HTMLVideoElement) wake(node);
+    if (node && node.querySelectorAll) node.querySelectorAll('video').forEach(wake);
+  }
+  sweep(document);
+  new MutationObserver(function(records){
+    records.forEach(function(rec){ rec.addedNodes.forEach(sweep); });
+  }).observe(document.documentElement, {childList:true, subtree:true});
 })();
 ''';
     await _wv?.runJavaScript(script);
@@ -300,6 +454,14 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
   void didChangeMetrics() {
     if (mounted) setState(() {});
     _scheduleReflowPokes();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      unawaited(_consumePending());
+    }
   }
 
   void _scheduleReflowPokes() {
@@ -324,6 +486,10 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
     );
   }
 
+  void _log(String message) {
+    assert(() { debugPrint('[EBR.portal] $message'); return true; }());
+  }
+
   Future<bool> _handleBack() async {
     final can = await _wv?.canGoBack() ?? false;
     if (can) {
@@ -338,6 +504,7 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _connSub?.cancel();
+    widget.signals.onDestination = widget.onPushFromGate;
     // Restore the default overlay so any subsequent native screen (e.g. the
     // offline screen shown on connectivity loss) is not stuck in immersive.
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -346,7 +513,6 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    if (_offline) return widget.offlineBuilder(context);
     final safe = MediaQuery.of(context).viewPadding;
 
     return PopScope(
@@ -357,17 +523,27 @@ class _RoostPortalState extends State<RoostPortal> with WidgetsBindingObserver {
       },
       child: Scaffold(
         backgroundColor: Colors.black,
-        body: _viewportReady && _wv != null
-            ? Padding(
-                padding: EdgeInsets.only(
-                  top: safe.top,
-                  bottom: safe.bottom,
-                  left: safe.left,
-                  right: safe.right,
-                ),
-                child: WebViewWidget(controller: _wv!),
-              )
-            : const ColoredBox(color: Colors.black),
+        resizeToAvoidBottomInset: false,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            _viewportReady && _wv != null
+                ? Padding(
+                    padding: EdgeInsets.only(
+                      top: safe.top,
+                      bottom: safe.bottom,
+                      left: safe.left,
+                      right: safe.right,
+                    ),
+                    child: WebViewWidget(controller: _wv!),
+                  )
+                : const ColoredBox(color: Colors.black),
+            if (_offline)
+              Positioned.fill(
+                child: EmptyAirPage(onRetry: _resumeFromOffline),
+              ),
+          ],
+        ),
       ),
     );
   }

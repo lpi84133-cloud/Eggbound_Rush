@@ -24,10 +24,30 @@ class HatchExchange {
   Future<HatchReply> resolve({
     required String? pushToken,
     String? locale,
+    bool hurry = false,
   }) async {
     if (!EraHatchConfig.grayCredentialsReady) return HatchReply.denied;
 
-    final attribution = await _attribution.awaitConversion();
+    if (hurry) {
+      await _waitForConfigHost();
+      await Future.wait<Object?>([
+        _attribution.awaitConversion(
+          timeout: EraHatchConfig.restoreSignalsTimeout,
+        ),
+        _attribution.awaitDeepLink(
+          window: EraHatchConfig.restoreDeepLinkWindow,
+        ),
+      ]);
+    } else {
+      // Wait for the install callback (or its ceiling), then also give the
+      // deep-link callback a short window — a paid OneLink click can deliver
+      // deep_link_value / pid / c after the install callback has already fired.
+      await _attribution.awaitConversion();
+      await _attribution.awaitDeepLink(window: const Duration(seconds: 3));
+      await _attribution.awaitRefinedAttribution();
+    }
+
+    final attribution = _attribution.currentAttribution();
     final afId = await _attribution.appsFlyerUID();
     final idfa = await _readIdfaIfAllowed();
 
@@ -40,15 +60,42 @@ class HatchExchange {
     );
 
     _log('POST ${EraHatchConfig.configEndpoint} body_keys=${body.keys.toList()}');
-    final response = await _agent.postJson(
-      uri: Uri.parse(EraHatchConfig.configEndpoint),
-      body: body,
-    );
-    if (response == null) return HatchReply.denied;
+    final timeout =
+        hurry ? EraHatchConfig.hurryConfigTimeout : EraHatchConfig.configPostTimeout;
+    final attempts = hurry ? EraHatchConfig.hurryConfigAttempts : 1;
+    Map<String, dynamic>? response;
+    for (var i = 0; i < attempts; i++) {
+      if (i > 0) {
+        await Future<void>.delayed(EraHatchConfig.hurryConfigRetryGap);
+      }
+      response = await _agent.postJson(
+        uri: Uri.parse(EraHatchConfig.configEndpoint),
+        body: body,
+        timeout: timeout,
+      );
+      if (response != null) break;
+    }
+    if (response == null) return HatchReply.unreachable;
 
     final reply = HatchReply.fromJson(response);
     _log('response granted=${reply.granted} url=${reply.destination ?? '—'}');
     return reply;
+  }
+
+  /// Radio can report "up" a beat before DNS actually works. Warm the
+  /// config host so the first POST after Nowifi isn't a 11 s timeout.
+  Future<void> _waitForConfigHost() async {
+    final host = Uri.parse(EraHatchConfig.configEndpoint).host;
+    if (host.isEmpty) return;
+    for (var i = 0; i < 2; i++) {
+      try {
+        final found = await InternetAddress.lookup(host).timeout(
+          EraHatchConfig.hurryDnsTimeout,
+        );
+        if (found.isNotEmpty) return;
+      } catch (_) {}
+      await Future<void>.delayed(EraHatchConfig.hurryConfigRetryGap);
+    }
   }
 
   /// Returns the raw advertising identifier (IDFA on iOS) only when the

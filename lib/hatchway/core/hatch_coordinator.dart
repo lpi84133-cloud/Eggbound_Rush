@@ -10,6 +10,7 @@ import '../infra/launch_route_reader.dart';
 import '../infra/nest_vault.dart';
 import '../infra/reach_probe.dart';
 import '../infra/roost_agent.dart';
+import '../models/hatch_reply.dart';
 import '../models/session_mode.dart';
 
 /// The single decision the paid-campaign path ever makes: for this launch,
@@ -63,21 +64,53 @@ class HatchCoordinator {
   final EggSignalHub signals;
 
   Future<HatchDestination>? _pending;
+  int _runId = 0;
 
-  Future<HatchDestination> decide({HatchProgress? onProgress}) {
-    return _pending ??= _runPipeline(onProgress ?? _noopProgress)
+  /// [fresh] drops a stale in-flight pipeline (the one that started while
+  /// the radio was down) so Retry does not wait out its timeouts.
+  /// [hurry] shortens AF / token / config waits after a Nowifi restore.
+  Future<HatchDestination> decide({
+    HatchProgress? onProgress,
+    bool fresh = false,
+    bool hurry = false,
+  }) {
+    if (fresh) {
+      _runId++;
+      final id = _runId;
+      final fut = _runPipeline(
+        onProgress ?? _noopProgress,
+        hurry: hurry,
+      ).whenComplete(() {
+        if (_runId == id) _pending = null;
+      });
+      _pending = fut;
+      return fut;
+    }
+    return _pending ??= _runPipeline(onProgress ?? _noopProgress, hurry: hurry)
         .whenComplete(() => _pending = null);
   }
 
   static void _noopProgress(double fraction, String label) {}
 
-  Future<HatchDestination> _runPipeline(HatchProgress report) async {
+  Future<HatchDestination> _runPipeline(
+    HatchProgress report, {
+    bool hurry = false,
+  }) async {
+    final id = _runId;
+    bool stillCurrent() => id == _runId;
+
     report(0.02, 'Warming up');
 
     // 1. Cold-start push tap always wins — if the user tapped a notification
     //    while the app was killed, load that URL first.
     final coldUrl = await LaunchRouteReader.consume();
     if (coldUrl != null && coldUrl.isNotEmpty) {
+      if (!stillCurrent()) return HatchDestination.offline;
+      // Firebase would re-report the same tap through getInitialMessage;
+      // suppress so it is not stashed and replayed on the next clean start.
+      signals.suppressInitialMessage();
+      await vault.writeMode(NestRoute.portal);
+      await vault.consumePushUrl();
       report(1, 'Opening notification');
       _log('cold-start URL: $coldUrl');
       return HatchDestination.portal(coldUrl, coldStart: true);
@@ -87,16 +120,25 @@ class HatchCoordinator {
     final mode = await vault.readMode();
     _log('mode=$mode');
 
-    // 2. Offline: never trap non-organic users on the game.
+    // 2. Interface check (connectivity_plus — radio up/down, NOT DNS).
+    //    First launch and returning gray both need a live link. Returning
+    //    native does not: the game is fully local.
+    //    Without a config answer we MUST NOT pick native vs portal.
     final hasInterface = await probe.hasAnyInterface();
     if (!hasInterface && mode != NestRoute.native) {
       report(1, 'Waiting for internet');
       return HatchDestination.offline;
     }
 
-    // 3. Returning gray user: try the saved URL first, otherwise re-POST.
+    // 3. Returning gray user: a pending push tap outranks the saved link.
     if (mode == NestRoute.portal) {
       report(0.25, 'Reading saved link');
+      final pending = await vault.consumePushUrl();
+      if (pending != null && pending.isNotEmpty) {
+        if (!stillCurrent()) return HatchDestination.offline;
+        report(1, 'Opening notification');
+        return HatchDestination.portal(pending);
+      }
       final saved = await vault.readSavedUrl();
       if (saved != null) {
         report(1, 'Opening content');
@@ -123,25 +165,49 @@ class HatchCoordinator {
     }
 
     // 5. Fresh or due for reclassification: run the full attribution +
-    //    config pipeline.
+    //    config pipeline. Nothing network-dependent runs before the
+    //    interface check above (gray_flow_lessons.md §25).
     report(0.35, 'Warming attribution');
     await attribution.start();
 
     report(0.5, 'Preparing signals');
-    String? pushToken;
-    try {
-      pushToken = await signals.awaitToken().timeout(
-        EraHatchConfig.installSignalsTimeout,
-        onTimeout: () => null,
-      );
-    } catch (_) {
-      pushToken = null;
+    String? pushToken = signals.token;
+    if (!hurry) {
+      try {
+        pushToken = await signals.awaitToken().timeout(
+          EraHatchConfig.installSignalsTimeout,
+          onTimeout: () => signals.token,
+        );
+      } catch (_) {
+        pushToken = signals.token;
+      }
     }
-    _log('push_token_ready=${pushToken != null}');
+    _log('push_token_ready=${pushToken != null} hurry=$hurry');
 
     report(0.7, 'Contacting service');
-    final reply = await exchange.resolve(pushToken: pushToken);
+    HatchReply reply;
+    while (true) {
+      reply = await exchange.resolve(pushToken: pushToken, hurry: hurry);
+      if (!stillCurrent()) return HatchDestination.offline;
+      if (reply.granted && reply.destination != null) break;
+      if (reply.reachedServer) break;
+      // Transport miss. Nowifi only when the radio is actually down —
+      // a live interface (OneLink restore, Wi-Fi just came back) must
+      // keep trying instead of bouncing to the offline screen.
+      if (!await probe.hasAnyInterface()) {
+        _log('config unreachable, no interface — nowifi');
+        if (mode == NestRoute.native) {
+          report(1, 'Loading game');
+          return HatchDestination.native;
+        }
+        report(1, 'Waiting for internet');
+        return HatchDestination.offline;
+      }
+      _log('config unreachable, radio up — retrying');
+      await Future<void>.delayed(EraHatchConfig.hurryConfigRetryGap);
+    }
     report(0.92, 'Applying decision');
+    if (!stillCurrent()) return HatchDestination.offline;
 
     if (reply.granted && reply.destination != null) {
       await vault.writeSavedUrl(
@@ -153,11 +219,9 @@ class HatchCoordinator {
       return HatchDestination.portal(reply.destination!);
     }
 
-    // 6. Only commit to the native path on a genuine "no url" response —
-    //    a network failure must never lock a paid user out of the shell.
-    if (reply.rawMessage != null || mode == NestRoute.native) {
-      await vault.writeMode(NestRoute.native);
-    }
+    // Genuine "no URL" from the server — only now may we commit native.
+    if (!stillCurrent()) return HatchDestination.offline;
+    await vault.writeMode(NestRoute.native);
     report(1, 'Loading game');
     return HatchDestination.native;
   }
@@ -175,7 +239,7 @@ HatchCoordinator buildCoordinator() {
   final vault = NestVault();
   final probe = ReachProbe();
   final exchange = HatchExchange(agent: agent, attribution: attribution);
-  final signals = EggSignalHub();
+  final signals = EggSignalHub(vault);
   return HatchCoordinator(
     vault: vault,
     attribution: attribution,

@@ -1,14 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// No-internet screen with a large retry button. The parent supplies a
-/// [retryBuilder] that returns a brand new gate widget so Retry re-runs the
-/// full pipeline (see gray_flow_lessons.md item 3 — pressing Retry against
-/// a captured parent context threw "widget unmounted").
+/// No-internet screen with a large retry button.
+///
+/// Two retry modes:
+///   * [retryBuilder] — replace the navigator with a fresh gate (first
+///     launch / returning gray with no live WebView).
+///   * [onRetry] — keep the current tree (in-session overlay on top of
+///     the WebView so reconnect resumes the same page, not notify).
 class EmptyAirPage extends StatefulWidget {
-  const EmptyAirPage({super.key, required this.retryBuilder});
+  const EmptyAirPage({
+    super.key,
+    this.retryBuilder,
+    this.onRetry,
+  }) : assert(retryBuilder != null || onRetry != null);
 
-  final WidgetBuilder retryBuilder;
+  final WidgetBuilder? retryBuilder;
+  final VoidCallback? onRetry;
 
   @override
   State<EmptyAirPage> createState() => _EmptyAirPageState();
@@ -32,11 +40,16 @@ class _EmptyAirPageState extends State<EmptyAirPage> {
   Future<void> _retry() async {
     if (_busy) return;
     setState(() => _busy = true);
+    if (widget.onRetry != null) {
+      widget.onRetry!();
+      if (mounted) setState(() => _busy = false);
+      return;
+    }
     // Replace the entire gate subtree — never pop with the (possibly
     // unmounted) parent's context.
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pushReplacement(
-      MaterialPageRoute<void>(builder: widget.retryBuilder),
+      MaterialPageRoute<void>(builder: widget.retryBuilder!),
     );
   }
 

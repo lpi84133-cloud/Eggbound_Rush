@@ -30,6 +30,10 @@ class NestVault {
       '${EraHatchConfig.storagePrefix}pushOsDenied';
   static final String _kOrganicLastCheckAt =
       '${EraHatchConfig.storagePrefix}organicLastCheckAt';
+  static final String _kInviteShown =
+      '${EraHatchConfig.storagePrefix}inviteShown';
+  static final String _kPendingPushUrl =
+      '${EraHatchConfig.storagePrefix}pendingTap';
 
   Future<SharedPreferences> _asPrefs() async {
     return _prefs ??= await SharedPreferences.getInstance();
@@ -153,5 +157,37 @@ class NestVault {
       _kOrganicLastCheckAt,
       DateTime.now().millisecondsSinceEpoch,
     );
+  }
+
+  Future<bool> readInviteShown() async {
+    final prefs = await _asPrefs();
+    return prefs.getBool(_kInviteShown) ?? false;
+  }
+
+  Future<void> markInviteShown() async {
+    final prefs = await _asPrefs();
+    await prefs.setBool(_kInviteShown, true);
+  }
+
+  /// One-shot URL from a push tap that arrived before the WebView was
+  /// ready to take it. Survives a brief splash / invite so the portal
+  /// can open the destination instead of the last casino page.
+  Future<void> stashPushUrl(String url) async {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return;
+    try {
+      await _secure.write(key: _kPendingPushUrl, value: trimmed);
+    } catch (_) {}
+  }
+
+  Future<String?> consumePushUrl() async {
+    try {
+      final value = await _secure.read(key: _kPendingPushUrl);
+      if (value != null) await _secure.delete(key: _kPendingPushUrl);
+      if (value == null || value.trim().isEmpty) return null;
+      return value.trim();
+    } catch (_) {
+      return null;
+    }
   }
 }

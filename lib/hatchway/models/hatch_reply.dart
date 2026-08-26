@@ -5,6 +5,7 @@ class HatchReply {
     this.destination,
     this.expiresAt,
     this.rawMessage,
+    this.reachedServer = true,
   });
 
   /// True when the server picked a partner URL for this device.
@@ -19,7 +20,19 @@ class HatchReply {
   /// Free-form message (server "no-url" reason). Only useful for debug.
   final String? rawMessage;
 
+  /// False when the POST never got a 2xx body (timeout / TLS / offline).
+  /// A first launch MUST NOT commit `native` on this — there was no config
+  /// decision, only a transport failure.
+  final bool reachedServer;
+
   static const HatchReply denied = HatchReply(granted: false);
+
+  /// Transport failure — distinct from [denied] so the coordinator can
+  /// send the user to Nowifi instead of locking them into the game.
+  static const HatchReply unreachable = HatchReply(
+    granted: false,
+    reachedServer: false,
+  );
 
   factory HatchReply.fromJson(Map<String, dynamic> json) {
     final ok = json['ok'] == true;

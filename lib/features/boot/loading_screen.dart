@@ -10,9 +10,33 @@ import '../../core/theme/app_typography.dart';
 import 'boot_controller.dart';
 
 class LoadingScreen extends ConsumerStatefulWidget {
-  const LoadingScreen({super.key, required this.onReady});
+  const LoadingScreen({
+    super.key,
+    required this.onReady,
+    this.launchReady = false,
+    this.paused = false,
+    this.allowPastGate = false,
+    this.sprint = false,
+  });
 
   final VoidCallback onReady;
+
+  /// Set by [HatchGate] once the routing decision is in and (for the
+  /// native path) game services are wired. The bar may then leave the
+  /// 80 % hold and run to 100 % — never earlier.
+  final bool launchReady;
+
+  /// Freeze the painted value (Nowifi overlay). Resume continues from
+  /// the same percentage instead of restarting at 0.
+  final bool paused;
+
+  /// Without a live interface the bar must not climb past the ~32 % gate.
+  /// Past that only after the parent confirms the radio is up.
+  final bool allowPastGate;
+
+  /// After Nowifi → Retry with a live radio, close the remaining 32→80
+  /// stretch in about a second instead of the first-launch 5.1 s clock.
+  final bool sprint;
 
   @override
   ConsumerState<LoadingScreen> createState() => _LoadingScreenState();
@@ -23,10 +47,19 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
   late final Ticker _ticker;
   Duration _lastTick = Duration.zero;
 
-  /// The value painted on screen. It chases the real progress instead of
-  /// jumping, but it is never allowed to run ahead of it.
+  /// Painted value. Climbs 0 → 0.80 on a fixed clock (~5.1 s), then waits.
+  /// Only the parent flipping [LoadingScreen.launchReady] lets it finish.
   double _displayed = 0;
   bool _handedOff = false;
+
+  /// ~5.1 s to the 80 % hold — a round five-second Duration is a
+  /// portfolio fingerprint (hardening §7a / §9.7).
+  static const double _hold = 0.80;
+  /// Nowifi must never paint above this unless the radio is actually up.
+  static const double _gate = 0.32;
+  static const double _fillSeconds = 5.1;
+  static const double _sprintSeconds = 1.15;
+  static const double _finishSeconds = 0.28;
 
   @override
   void initState() {
@@ -37,32 +70,55 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
     });
   }
 
+  @override
+  void didUpdateWidget(LoadingScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.paused != oldWidget.paused ||
+        widget.allowPastGate != oldWidget.allowPastGate ||
+        widget.sprint != oldWidget.sprint) {
+      _lastTick = Duration.zero;
+    }
+  }
+
   void _onTick(Duration elapsed) {
+    if (widget.paused) {
+      _lastTick = Duration.zero;
+      return;
+    }
+
     final delta = _lastTick == Duration.zero
         ? 0.016
         : (elapsed - _lastTick).inMicroseconds / 1e6;
     _lastTick = elapsed;
+    // A huge delta (app resumed, overlay dismissed) must not jump the bar.
+    final step = delta.clamp(0.0, 0.05);
 
-    final target = ref.read(bootControllerProvider).progress;
-    if (_displayed >= target) return;
+    final finishing = widget.launchReady && _displayed >= _hold - 0.002;
+    final cruise = widget.allowPastGate ? _hold : _gate;
+    final target = finishing ? 1.0 : cruise;
+    if (_displayed >= target) {
+      if (finishing) _finish();
+      return;
+    }
 
-    // Ease toward the target, but keep a floor so the bar always visibly
-    // advances, and a ceiling so a big jump still reads as motion.
-    final remaining = target - _displayed;
-    final step = math.max(remaining * delta * 6.0, delta * 0.18);
-    final next = math.min(target, _displayed + step);
+    final rate = finishing
+        ? (1.0 - _hold) / _finishSeconds
+        : widget.sprint
+            ? math.max(0.08, _hold - _displayed) / _sprintSeconds
+            : _hold / _fillSeconds;
+    final next = math.min(target, _displayed + rate * step);
 
     setState(() => _displayed = next);
 
-    if (next >= 0.9995) _finish();
+    if (next >= 0.9995 && widget.launchReady) _finish();
   }
 
   Future<void> _finish() async {
     if (_handedOff) return;
-    if (!ref.read(bootControllerProvider).isReady) return;
+    if (!widget.launchReady) return;
     _handedOff = true;
     _ticker.stop();
-    await Future<void>.delayed(const Duration(milliseconds: 220));
+    await Future<void>.delayed(const Duration(milliseconds: 180));
     if (mounted) widget.onReady();
   }
 
@@ -150,9 +206,8 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
   }
 }
 
-/// A flat horizontal track that fills left to right. It reports real boot
-/// progress, so the percentage beside it is the share of startup work that
-/// has genuinely finished rather than a timed animation.
+/// A flat horizontal track that fills left to right. The splash owns a
+/// timed 0 → 80 % climb; the last 20 % is reserved for the actual hand-off.
 class _ProgressTrough extends StatelessWidget {
   const _ProgressTrough({required this.value, required this.height});
 
@@ -161,43 +216,39 @@ class _ProgressTrough extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        final filled = (width * value).clamp(0.0, width);
-
-        return SizedBox(
-          height: height,
-          child: Stack(
-            alignment: Alignment.centerLeft,
-            children: [
-              Container(
-                height: height,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.28),
-                  borderRadius: BorderRadius.circular(height),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.42),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(2),
-                child: SizedBox(
-                  width: math.max(0, filled - 4),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(height),
-                      boxShadow: AppShadow.card,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+    final t = value.clamp(0.0, 1.0);
+    return SizedBox(
+      height: height,
+      width: double.infinity,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.28),
+          borderRadius: BorderRadius.circular(height),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.42),
           ),
-        );
-      },
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(2),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(height),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final fill = constraints.maxWidth * t;
+                if (fill <= 0) return const SizedBox.expand();
+                return Align(
+                  alignment: Alignment.centerLeft,
+                  child: SizedBox(
+                    width: fill,
+                    height: constraints.maxHeight,
+                    child: const ColoredBox(color: Colors.white),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

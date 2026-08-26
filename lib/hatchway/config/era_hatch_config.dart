@@ -27,8 +27,19 @@ class EraHatchConfig {
   static const int organicRecheckSeconds = 8;
   static const Duration configPostTimeout = Duration(seconds: 18);
   static const Duration installSignalsTimeout = Duration(seconds: 7);
+  /// After Nowifi → Retry with a live radio: skip the long first-launch
+  /// waits (AF refine / deeplink / 18 s POST) so we don't sit on 80 %
+  /// and then bounce back to Nowifi. Rotated off sibling round numbers.
+  static const Duration retryLinkSettle = Duration(milliseconds: 580);
+  static const Duration hurryDnsTimeout = Duration(milliseconds: 920);
+  static const Duration hurryConfigTimeout = Duration(milliseconds: 2800);
+  static const Duration hurryConfigRetryGap = Duration(milliseconds: 410);
+  static const int hurryConfigAttempts = 4;
+  /// After Nowifi restore: wait for AF conversion + OneLink, skip the 12 s refine.
+  static const Duration restoreSignalsTimeout = Duration(milliseconds: 4200);
+  static const Duration restoreDeepLinkWindow = Duration(milliseconds: 3200);
   static const Duration attPromptDelay = Duration(milliseconds: 480);
-  static const int redirectLoopRetries = 2;
+  static const int redirectLoopRetries = 4;
   static const int apnsPollCount = 6;
   static const Duration apnsPollStep = Duration(milliseconds: 420);
   static const Duration webViewSettleDelay = Duration(milliseconds: 620);
@@ -72,9 +83,11 @@ class EraHatchConfig {
     0x1B, 0x4D, 0x84, 0x4D, 0xEE, 0xE6, 0x79, 0x3C, 0xCB, 0x1B, 0xA7, 0x28,
     0x8B, 0xE3, 0x59, 0x14, 0xD0, 0x6A, 0x35, 0xCE, 0x1A,
   ];
+  static const List<int> kStoreIdentity = <int>[
+    0xBB, 0x7F, 0x82, 0xD3, 0x69, 0xF2, 0x0F, 0xAB, 0x49, 0x9C,
+  ];
   static const List<int> kAppNameIdentity = <int>[
-    0xC8, 0x20, 0xD5, 0x83, 0x35, 0xB3, 0x51, 0xF6, 0x51, 0xFC, 0x7E, 0xA7,
-    0x01,
+    0xC8, 0x20, 0xD5, 0x83, 0x35, 0xB3, 0x51, 0xF6, 0x23, 0xDB, 0x78, 0xBC,
   ];
   static const List<int> kUaAppIdTag = <int>[
     0xEC, 0x37, 0xC2, 0x88, 0x3E, 0xE9,
@@ -109,13 +122,24 @@ class EraHatchConfig {
 
   // ---- Decoded accessors (cached implicitly by Dart const canonicalisation)
 
-  static String get configEndpoint => FeatherCodec.unfoldFeathers(kConfigEndpoint);
+  /// Compile-time override for the settings host. When empty (the default) the
+  /// endpoint decoded from [kConfigEndpoint] is used. The value is baked in by
+  /// `--dart-define=EBR_CONFIG_URL=…`; if the flag is not passed the constant
+  /// is the empty string, so no debug URL survives into a shipping binary.
+  static const String _debugConfigOverride =
+      String.fromEnvironment('EBR_CONFIG_URL');
+
+  static String get configEndpoint {
+    if (_debugConfigOverride.isNotEmpty) return _debugConfigOverride;
+    return FeatherCodec.unfoldFeathers(kConfigEndpoint);
+  }
   static String get gcdBase => FeatherCodec.unfoldFeathers(kGcdBase);
   static String get appsFlyerDevKey => FeatherCodec.unfoldFeathers(kAppsFlyerDevKey);
   static String get firebaseProjectNumber =>
       FeatherCodec.unfoldFeathers(kFirebaseProjectNumber);
   static String get oneLinkHost => FeatherCodec.unfoldFeathers(kOneLinkHost);
   static String get bundleIdentity => FeatherCodec.unfoldFeathers(kBundleIdentity);
+  static String get storeIdentity => FeatherCodec.unfoldFeathers(kStoreIdentity);
   static String get appNameIdentity => FeatherCodec.unfoldFeathers(kAppNameIdentity);
   static String get uaAppIdTag => FeatherCodec.unfoldFeathers(kUaAppIdTag);
   static String get uaAppNameTag => FeatherCodec.unfoldFeathers(kUaAppNameTag);
