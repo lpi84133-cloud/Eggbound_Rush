@@ -43,6 +43,3 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-
-# Firebase config — contains credentials, never commit to a public repo
-ios/Runner/GoogleService-Info.plist
