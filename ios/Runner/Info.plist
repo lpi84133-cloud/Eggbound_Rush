@@ -56,9 +56,32 @@
 		<key>ITSAppUsesNonExemptEncryption</key>
 		<false/>
 		<key>NSCameraUsageDescription</key>
-		<string>Eggbound Rush uses the camera only when you choose to take a new profile photo. The photo is stored on this device and is never uploaded.</string>
+		<string>Eggbound Rush uses the camera to take a profile photo or to attach a photo from a page you open.</string>
 		<key>NSPhotoLibraryUsageDescription</key>
-		<string>Eggbound Rush accesses your photo library only when you choose an existing picture as your profile photo. The photo is stored on this device and is never uploaded.</string>
+		<string>Eggbound Rush accesses your photo library to choose a profile photo or to attach a file from a page you open.</string>
+		<key>NSPhotoLibraryAddUsageDescription</key>
+		<string>Eggbound Rush saves a photo only when you choose to keep it on this device.</string>
+		<key>NSMicrophoneUsageDescription</key>
+		<string>Eggbound Rush uses the microphone only when a page you open needs it, for example to record a short clip.</string>
+		<key>CFBundleURLTypes</key>
+		<array>
+			<dict>
+				<key>CFBundleTypeRole</key>
+				<string>Editor</string>
+				<key>CFBundleURLName</key>
+				<string>com.eggboundrush.eggboundrushgame</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>eggboundrush</string>
+				</array>
+			</dict>
+		</array>
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>remote-notification</string>
+		</array>
+		<key>FirebaseAppDelegateProxyEnabled</key>
+		<true/>
 		<key>UILaunchStoryboardName</key>
 		<string>LaunchScreen</string>
 		<key>UIMainStoryboardFile</key>

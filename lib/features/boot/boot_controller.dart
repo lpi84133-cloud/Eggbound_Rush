@@ -1,4 +1,3 @@
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -266,10 +265,6 @@ class BootController extends Notifier<BootState> {
         notice: notice,
         needsOnboarding: needsOnboarding,
       ),
-    );
-
-    await SystemChrome.setPreferredOrientations(
-      const [DeviceOrientation.portraitUp],
     );
   }
 

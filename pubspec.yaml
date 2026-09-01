@@ -2,7 +2,7 @@ name: eggbound_rush
 description: "Organize your pasture, track nests and eggs, and keep a local collection log."
 publish_to: 'none'
 
-version: 1.0.3+4
+version: 1.0.3+5
 
 environment:
   sdk: ^3.12.2
@@ -25,10 +25,12 @@ dependencies:
   share_plus: ^13.3.0
   collection: ^1.19.1
   package_info_plus: ^10.2.1
-
-  # Mobile attribution: classifies each install as organic (App Store discovery)
-  # or non-organic (arrived via a paid OneLink campaign).
-  appsflyer_sdk: 6.18.1
+  connectivity_plus: ^6.1.5
+  url_launcher: ^6.3.2
+  flutter_inappwebview: ^6.1.5
+  firebase_core: ^3.15.2
+  firebase_messaging: ^15.2.10
+  adjust_sdk: ^5.8.0
   app_tracking_transparency: ^2.0.7
 
   # Local-only daily reminders. Purely on-device scheduling — no push service
@@ -48,6 +50,8 @@ dev_dependencies:
   flutter_native_splash: ^2.4.8
 
 flutter:
+  config:
+    enable-swift-package-manager: false
   uses-material-design: true
 
   assets:

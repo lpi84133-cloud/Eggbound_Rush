@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/app_typography.dart';
+import '../../gray/gray_router.dart';
 import 'boot_controller.dart';
 
 class LoadingScreen extends ConsumerStatefulWidget {
@@ -43,27 +44,47 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
         : (elapsed - _lastTick).inMicroseconds / 1e6;
     _lastTick = elapsed;
 
-    final target = ref.read(bootControllerProvider).progress;
-    if (_displayed >= target) return;
+    final boot = ref.read(bootControllerProvider);
+    final kind = ref.read(grayRouterProvider).kind;
 
-    // Ease toward the target, but keep a floor so the bar always visibly
-    // advances, and a ceiling so a big jump still reads as motion.
-    final remaining = target - _displayed;
-    final step = math.max(remaining * delta * 6.0, delta * 0.18);
-    final next = math.min(target, _displayed + step);
+    // The bar is the whole launch, so what it counts depends on where the
+    // launch ends. Heading for the WebView there is no native work left to
+    // wait for; heading for the game it is the boot tasks. Until the server
+    // has answered, the bar holds short of the end so it never sits full
+    // while something is still pending.
+    final target = switch (kind) {
+      GrayKind.pending => math.min(boot.progress, 0.92),
+      GrayKind.webview => 1.0,
+      GrayKind.stub => boot.progress,
+    };
 
-    setState(() => _displayed = next);
+    if (_displayed < target) {
+      // Ease toward the target, but keep a floor so the bar always visibly
+      // advances, and a ceiling so a big jump still reads as motion.
+      final remaining = target - _displayed;
+      final step = math.max(remaining * delta * 6.0, delta * 0.18);
+      setState(() => _displayed = math.min(target, _displayed + step));
+    }
 
-    if (next >= 0.9995) _finish();
+    final launchable = switch (kind) {
+      GrayKind.pending => false,
+      GrayKind.webview => true,
+      GrayKind.stub => boot.isReady,
+    };
+    if (launchable && _displayed >= 0.9995) _finish();
   }
 
-  Future<void> _finish() async {
+  void _finish() {
     if (_handedOff) return;
-    if (!ref.read(bootControllerProvider).isReady) return;
     _handedOff = true;
     _ticker.stop();
-    await Future<void>.delayed(const Duration(milliseconds: 220));
-    if (mounted) widget.onReady();
+    setState(() => _displayed = 1);
+    // Handing off inside the tick would swap the screen in the same frame the
+    // bar is completed, so the full bar would never be painted. One frame
+    // later it has been drawn and the app takes over immediately after.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onReady();
+    });
   }
 
   @override
@@ -74,6 +95,7 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(grayRouterProvider);
     final boot = ref.watch(bootControllerProvider);
     final size = MediaQuery.sizeOf(context);
     final isLandscape = size.width > size.height;
@@ -167,34 +189,30 @@ class _ProgressTrough extends StatelessWidget {
         final filled = (width * value).clamp(0.0, width);
 
         return SizedBox(
+          width: width,
           height: height,
-          child: Stack(
-            alignment: Alignment.centerLeft,
-            children: [
-              Container(
-                height: height,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.28),
-                  borderRadius: BorderRadius.circular(height),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.42),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.28),
+              borderRadius: BorderRadius.circular(height),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.42),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(2),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(height),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: SizedBox(
+                    width: math.max(0, filled - 4),
+                    height: height - 4,
+                    child: const ColoredBox(color: Colors.white),
                   ),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.all(2),
-                child: SizedBox(
-                  width: math.max(0, filled - 4),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(height),
-                      boxShadow: AppShadow.card,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
         );
       },
