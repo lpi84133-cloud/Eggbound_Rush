@@ -28,16 +28,30 @@ void main() {
     ]);
   });
 
-  test('every value is a flat string, naming included', () {
+  test('naming is a nested object, not an escaped string', () {
     final decoded = jsonDecode(jsonEncode(params.toJson())) as Map;
-    expect(decoded.values.every((value) => value is String), isTrue);
-    // The attribution payload travels as an escaped string, not a nested
-    // object, so the server reads one type for every field.
-    expect(decoded['naming'], isA<String>());
+    expect(decoded['naming'], isA<Map>());
+    expect(decoded['naming'], containsPair('network', 'TestLink'));
+    expect(decoded['naming'], containsPair('campaign', 'attributionName001'));
     expect(
-      jsonDecode(decoded['naming'] as String),
-      containsPair('network', 'TestLink'),
+      jsonEncode(params.toJson()),
+      isNot(contains(r'\"network\"')),
     );
+  });
+
+  test('empty naming serialises as an empty object', () {
+    const empty = GrayParams(
+      appId: 'app',
+      pushToken: '',
+      userAgent: '',
+      deviceID: '',
+      adId: '',
+      oneLink: 'https://example.go.link',
+      naming: '',
+      referer: '',
+    );
+    expect(empty.toJson()['naming'], isA<Map>());
+    expect(empty.toJson()['naming'], isEmpty);
   });
 
   test('oneLink and naming are mutually exclusive', () {
